@@ -418,7 +418,8 @@
 
       <div id="trim-preview" style="display:none;margin-bottom:22px;">
         <video id="trim-video" controls style="width:100%;border-radius:var(--radius);background:#000;max-height:280px;display:block;"></video>
-        <div style="display:flex;gap:8px;margin-top:10px;">
+        <div style="text-align:center;margin-top:8px;font-family:monospace;font-size:18px;font-weight:600;letter-spacing:1px;color:var(--accent);" id="trim-timecode">0:00.000</div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('start')">⬅ Set as Start Time</button>
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('end')">Set as End Time ➡</button>
         </div>
@@ -611,8 +612,20 @@ function onFile(input, tab) {
     if (vid.src) URL.revokeObjectURL(vid.src);
     vid.src = URL.createObjectURL(f);
     document.getElementById('trim-preview').style.display = 'block';
+    document.getElementById('trim-timecode').textContent = '0:00.000';
   }
 }
+
+document.getElementById('trim-video').addEventListener('timeupdate', () => {
+  const t = document.getElementById('trim-video').currentTime;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const rawS = t % 60;
+  const s = (rawS < 10 ? '0' : '') + rawS.toFixed(3);
+  document.getElementById('trim-timecode').textContent = h > 0
+    ? `${h}:${String(m).padStart(2,'0')}:${s}`
+    : `${m}:${s}`;
+});
 
 function setTrimPoint(point) {
   const t = document.getElementById('trim-video').currentTime;
