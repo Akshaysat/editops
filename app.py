@@ -489,11 +489,20 @@ def ytdl_route():
 # ── Transcription ────────────────────────────────────────────────────────────
 
 def romanize_text(text):
-    """Convert Devanagari characters to Roman (ITRANS). Latin chars pass through unchanged."""
+    """Romanize Devanagari runs to casual Roman. Latin words pass through unchanged."""
+    import re
     try:
         from indic_transliteration import sanscript
         from indic_transliteration.sanscript import transliterate
-        return transliterate(text, sanscript.DEVANAGARI, sanscript.ITRANS)
+
+        def _convert(m):
+            roman = transliterate(m.group(), sanscript.DEVANAGARI, sanscript.ITRANS)
+            # ITRANS uses uppercase for long vowels and special chars — map to casual forms
+            roman = roman.replace('A', 'aa').replace('I', 'ii').replace('U', 'oo')
+            roman = roman.replace('M', 'n').replace('H', '')
+            return roman.lower()
+
+        return re.sub(r'[ऀ-ॿ]+', _convert, text)
     except Exception:
         return text
 
