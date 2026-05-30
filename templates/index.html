@@ -281,10 +281,20 @@
       border-radius: 7px;
       margin-bottom: 6px;
       font-size: 13px;
+      transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+      cursor: default;
     }
-    .merge-item .mi-idx { color: var(--muted); font-size: 12px; min-width: 20px; }
-    .merge-item .mi-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .merge-item .mi-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .merge-item.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.08); }
+    .merge-item.dragging  { opacity: 0.35; }
+    .merge-item .mi-drag  { color: var(--muted); cursor: grab; font-size: 15px; user-select: none; flex-shrink: 0; }
+    .merge-item .mi-idx   { color: var(--muted); font-size: 12px; min-width: 20px; }
+    .merge-item .mi-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .merge-item .mi-size  { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .merge-item .mi-remove {
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 18px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+    }
+    .merge-item .mi-remove:hover { color: var(--error); }
 
     /* ── Divider ── */
     .divider { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
@@ -583,6 +593,7 @@
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let mergeFiles = [];
+let dragSrcIdx = null;
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(btn, tab) {
@@ -640,7 +651,8 @@ function setTrimPoint(point) {
 }
 
 function onMergeFiles(input) {
-  mergeFiles = Array.from(input.files);
+  mergeFiles = [...mergeFiles, ...Array.from(input.files)];
+  input.value = '';
   renderMergeList();
 }
 
@@ -648,11 +660,49 @@ function renderMergeList() {
   const list = document.getElementById('merge-list');
   if (!mergeFiles.length) { list.innerHTML = ''; return; }
   list.innerHTML = mergeFiles.map((f, i) => `
-    <div class="merge-item">
+    <div class="merge-item" draggable="true"
+         ondragstart="mergeDragStart(event,${i})"
+         ondragover="mergeDragOver(event)"
+         ondragleave="mergeDragLeave(event)"
+         ondrop="mergeDrop(event,${i})"
+         ondragend="mergeDragEnd()">
+      <span class="mi-drag">⠿</span>
       <span class="mi-idx">#${i + 1}</span>
       <span class="mi-name">${f.name}</span>
       <span class="mi-size">${fmtSize(f.size)}</span>
+      <button class="mi-remove" onclick="removeMergeFile(${i})" title="Remove">×</button>
     </div>`).join('');
+}
+
+function mergeDragStart(e, idx) {
+  dragSrcIdx = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.stopPropagation();
+  setTimeout(() => e.target.classList.add('dragging'), 0);
+}
+function mergeDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+function mergeDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function mergeDrop(e, targetIdx) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (dragSrcIdx === null || dragSrcIdx === targetIdx) return;
+  const moved = mergeFiles.splice(dragSrcIdx, 1)[0];
+  mergeFiles.splice(targetIdx, 0, moved);
+  renderMergeList();
+}
+function mergeDragEnd() {
+  dragSrcIdx = null;
+  document.querySelectorAll('.merge-item').forEach(el => {
+    el.classList.remove('dragging', 'drag-over');
+  });
+}
+function removeMergeFile(idx) {
+  mergeFiles.splice(idx, 1);
+  renderMergeList();
 }
 
 // ── Drag & drop ────────────────────────────────────────────────────────────
@@ -664,7 +714,7 @@ document.querySelectorAll('.dropzone').forEach(dz => {
     dz.classList.remove('dragover');
     const tab = dz.id.replace('dz-', '');
     if (tab === 'merge') {
-      mergeFiles = Array.from(e.dataTransfer.files);
+      mergeFiles = [...mergeFiles, ...Array.from(e.dataTransfer.files)];
       renderMergeList();
     } else {
       const inp = document.getElementById('f-' + tab);
