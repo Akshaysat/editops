@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EditOps — Money Mediia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -21,10 +24,12 @@
 
     html, body { height: 100%; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: var(--bg);
       color: var(--text);
       display: flex;
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
     }
 
     /* ── Sidebar ── */
@@ -55,25 +60,27 @@
     }
     .sidebar-brand .sb-name {
       font-size: 14px;
-      font-weight: 700;
+      font-weight: 600;
       color: #111111;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.1px;
+      font-family: 'Inter', sans-serif;
     }
-    .sidebar-nav { padding: 8px 10px; flex: 1; overflow-y: auto; }
+    .sidebar-nav { padding: 8px 8px; flex: 1; overflow-y: auto; }
     .nav-section {
-      font-size: 10.5px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.7px;
-      color: #BBBBBB;
-      padding: 14px 8px 5px;
+      letter-spacing: 0.6px;
+      color: #C0C0C0;
+      padding: 14px 8px 4px;
+      font-family: 'Inter', sans-serif;
     }
     .nav-item {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 9px;
       width: 100%;
-      padding: 8px 10px;
+      padding: 7px 10px;
       border: none;
       background: transparent;
       color: #555555;
@@ -84,32 +91,41 @@
       transition: all 0.12s;
       text-align: left;
       margin-bottom: 1px;
+      font-family: 'Inter', sans-serif;
+      letter-spacing: -0.1px;
     }
     .nav-item:hover:not(.active) { background: #F5F5F5; color: #111111; }
-    .nav-item.active { background: #111111; color: #FFFFFF; font-weight: 600; }
-    .nav-item .ni { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; opacity: 0.7; }
+    .nav-item.active { background: #111111; color: #FFFFFF; font-weight: 500; }
+    .nav-item .ni { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; opacity: 0.65; }
     .nav-item.active .ni { opacity: 1; }
     .sidebar-user {
       padding: 14px 16px;
       border-top: 1px solid var(--border);
     }
-    .sidebar-user .su-name { font-size: 13px; font-weight: 600; color: #111; }
-    .sidebar-user .su-role { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+    .sidebar-user .su-name { font-size: 13px; font-weight: 600; color: #111; font-family: 'Inter', sans-serif; }
+    .sidebar-user .su-role { font-size: 12px; color: var(--muted); margin-top: 2px; font-family: 'Inter', sans-serif; }
 
     /* ── Main ── */
     .main { margin-left: var(--sidebar-w); min-height: 100vh; flex: 1; background: var(--bg); }
     .content { max-width: 700px; margin: 0 auto; padding: 36px 28px 80px; }
 
     /* ── Page header (title above card) ── */
-    .page-header { margin-bottom: 22px; }
+    .page-header { margin-bottom: 20px; }
     .page-header h1 {
-      font-size: 22px;
+      font-size: 24px;
       font-weight: 700;
       color: var(--text);
-      letter-spacing: -0.4px;
-      margin-bottom: 4px;
+      letter-spacing: -0.5px;
+      margin-bottom: 5px;
+      font-family: 'Inter', sans-serif;
     }
-    .page-header p { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+    .page-header p {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-weight: 400;
+      font-family: 'Inter', sans-serif;
+    }
 
     /* ── Panel ── */
     .panel { display: none; }
@@ -160,11 +176,12 @@
     .field label {
       display: block;
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.6px;
       color: #AAAAAA;
       margin-bottom: 7px;
+      font-family: 'Inter', sans-serif;
     }
     .field input[type=text],
     .field input[type=number] {
@@ -174,7 +191,8 @@
       border-radius: 7px;
       padding: 9px 13px;
       color: var(--text);
-      font-size: 14px;
+      font-size: 13.5px;
+      font-family: 'Inter', sans-serif;
       transition: border-color 0.15s;
     }
     .field input:focus { outline: none; border-color: var(--text); }
@@ -229,17 +247,18 @@
     /* ── Submit ── */
     .submit-btn {
       width: 100%;
-      padding: 12px;
+      padding: 11px;
       background: var(--text);
       color: #FFFFFF;
       border: none;
-      border-radius: var(--radius);
-      font-size: 14px;
-      font-weight: 700;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 600;
+      font-family: 'Inter', sans-serif;
       cursor: pointer;
       transition: opacity 0.15s;
       margin-top: 6px;
-      letter-spacing: 0.1px;
+      letter-spacing: -0.1px;
     }
     .submit-btn:hover { opacity: 0.82; }
     .submit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
