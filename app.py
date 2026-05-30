@@ -653,25 +653,29 @@ def align_route():
 
             _tasks[uid]['progress'] = 'Loading alignment model… (first run downloads ~360 MB)'
 
-            import torch
+            import onnxruntime
             from ctc_forced_aligner import (
-                load_audio, load_alignment_model, generate_emissions,
+                load_audio, ensure_onnx_model, generate_emissions,
                 preprocess_text, get_alignments, get_spans, postprocess_results,
+                Tokenizer, MODEL_URL,
             )
 
-            device = 'mps' if torch.backends.mps.is_available() else 'cpu'
+            model_path = os.path.join(
+                os.path.expanduser('~'), '.cache', 'ctc_forced_aligner', 'model.onnx')
+            ensure_onnx_model(model_path, MODEL_URL)
+            session   = onnxruntime.InferenceSession(model_path)
+            tokenizer = Tokenizer()
 
-            audio = load_audio(wav_path, 16000).to(device)
-            align_model, tokenizer, dictionary = load_alignment_model(
-                device, dtype=torch.float32)
+            audio = load_audio(wav_path, ret_type='np')
 
             _tasks[uid]['progress'] = 'Aligning script to audio…'
 
-            emissions, stride = generate_emissions(align_model, audio, batch_size=8)
+            emissions, stride = generate_emissions(session, audio)
             tokens_starred, text_starred = preprocess_text(
                 script, romanize=False, language=language)
-            segments_raw, scores, _ = get_alignments(emissions, tokens_starred, dictionary)
-            spans = get_spans(tokens_starred, segments_raw)
+            segments_raw, scores, blank_token = get_alignments(
+                emissions, tokens_starred, tokenizer)
+            spans  = get_spans(tokens_starred, segments_raw, blank_token)
             word_ts = postprocess_results(text_starred, spans, stride, scores)
 
             segs = words_to_srt_segments(word_ts)
