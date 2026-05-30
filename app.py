@@ -445,12 +445,19 @@ def ytdl_route():
 
     if quality == 'audio':
         cmd = ['yt-dlp', '-x', '--audio-format', 'mp3', '--audio-quality', '0',
+               '-N', '4',
                '--no-playlist', '--print', '%(title)s', '--no-simulate',
                '-o', out_tmpl, url]
     else:
-        cmd = ['yt-dlp',
-               '-f', f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
-               '--merge-output-format', 'mp4',
+        # Prefer H.264+M4A: fastest merge, widest compatibility, no re-encode needed
+        fmt = (
+            f'bestvideo[height<={quality}][vcodec^=avc][ext=mp4]+bestaudio[ext=m4a]'
+            f'/bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]'
+            f'/bestvideo[height<={quality}]+bestaudio'
+            f'/best[height<={quality}]'
+        )
+        cmd = ['yt-dlp', '-f', fmt, '--merge-output-format', 'mp4',
+               '-N', '4',
                '--no-playlist', '--print', '%(title)s', '--no-simulate',
                '-o', out_tmpl, url]
 
