@@ -898,12 +898,24 @@ function submitYT() {
 
   resetUI('ytdl');
   document.getElementById('pw-ytdl').classList.add('visible');
-  document.getElementById('pl-ytdl').textContent = 'Downloading… this may take a minute';
+  document.getElementById('pl-ytdl').textContent = 'Downloading…';
 
-  // Animate a slow crawl since download duration is unknown
   const pf = document.getElementById('pf-ytdl');
-  pf.style.transition = 'none'; pf.style.width = '5%';
-  setTimeout(() => { pf.style.transition = 'width 60s linear'; pf.style.width = '90%'; }, 100);
+  const pp = document.getElementById('pp-ytdl');
+  pf.style.transition = 'none'; pf.style.width = '3%';
+  pp.textContent = '3%';
+  // 600s crawl — handles videos that take several minutes
+  setTimeout(() => { pf.style.transition = 'width 600s linear'; pf.style.width = '88%'; }, 100);
+
+  const _ytStart = Date.now();
+  if (pf._ticker) clearInterval(pf._ticker);
+  pf._ticker = setInterval(() => {
+    if (!document.getElementById('pw-ytdl').classList.contains('visible')) {
+      clearInterval(pf._ticker); return;
+    }
+    const elapsed = Math.min(Date.now() - _ytStart, 600000);
+    pp.textContent = Math.round(3 + elapsed / 600000 * 85) + '%';
+  }, 500);
 
   const form = new FormData();
   form.append('url', url);

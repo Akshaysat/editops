@@ -445,12 +445,12 @@ def ytdl_route():
 
     if quality == 'audio':
         cmd = ['yt-dlp', '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-               '-o', out_tmpl, url]
+               '--print', '%(title)s', '-o', out_tmpl, url]
     else:
         cmd = ['yt-dlp',
                '-f', f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
                '--merge-output-format', 'mp4',
-               '-o', out_tmpl, url]
+               '--print', '%(title)s', '-o', out_tmpl, url]
 
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
@@ -466,10 +466,8 @@ def ytdl_route():
     output_path = matches[0]
     ext = os.path.splitext(output_path)[1]
 
-    # Get a clean filename from the video title
-    title_r = subprocess.run(['yt-dlp', '--get-title', url],
-                             capture_output=True, text=True, timeout=30)
-    raw_title = title_r.stdout.strip() or 'video'
+    # Title comes from --print %(title)s in stdout (first non-empty line)
+    raw_title = next((l for l in r.stdout.splitlines() if l.strip()), 'video')
     safe_title = ''.join(c for c in raw_title if c.isalnum() or c in ' -_').strip()[:80]
     download_name = f'{safe_title}{ext}' if safe_title else f'video{ext}'
 
