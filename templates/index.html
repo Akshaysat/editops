@@ -416,6 +416,15 @@
         <input type="file" id="f-trim" accept="video/*" style="display:none" onchange="onFile(this,'trim')">
       </div>
 
+      <div id="trim-preview" style="display:none;margin-bottom:22px;">
+        <video id="trim-video" controls style="width:100%;border-radius:var(--radius);background:#000;max-height:280px;display:block;"></video>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('start')">⬅ Set as Start Time</button>
+          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('end')">Set as End Time ➡</button>
+        </div>
+        <div class="hint" style="text-align:center;margin-top:6px;">Scrub to the point you want, then click a button above</div>
+      </div>
+
       <div style="display:flex;gap:14px;">
         <div class="field" style="flex:1">
           <label>Start Time <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
@@ -596,6 +605,24 @@ function onFile(input, tab) {
   const dz = document.getElementById('dz-' + tab);
   dz.classList.add('has-file');
   document.getElementById('fi-' + tab).textContent = `✓  ${f.name}  (${fmtSize(f.size)})`;
+
+  if (tab === 'trim') {
+    const vid = document.getElementById('trim-video');
+    if (vid.src) URL.revokeObjectURL(vid.src);
+    vid.src = URL.createObjectURL(f);
+    document.getElementById('trim-preview').style.display = 'block';
+  }
+}
+
+function setTrimPoint(point) {
+  const t = document.getElementById('trim-video').currentTime;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = Math.floor(t % 60);
+  const ts = h > 0
+    ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+    : `${m}:${String(s).padStart(2,'0')}`;
+  document.getElementById(point === 'start' ? 'trm-start' : 'trm-end').value = ts;
 }
 
 function onMergeFiles(input) {
