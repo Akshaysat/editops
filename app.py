@@ -247,19 +247,20 @@ def trim_route():
     input_path, uid = save_upload(file)
     output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
 
-    cut_at = request.form.get('cut_at', '').strip()
-    keep   = request.form.get('keep', 'before')
+    start = request.form.get('start', '').strip()
+    end   = request.form.get('end', '').strip()
 
-    if not cut_at:
+    if not start and not end:
         os.remove(input_path)
-        return jsonify(error='Please provide a cut point.'), 400
+        return jsonify(error='Please provide a start time, end time, or both.'), 400
 
-    if keep == 'before':
-        cmd = ['ffmpeg', '-y', '-i', input_path,
-               '-to', cut_at, '-c', 'copy', output_path]
-    else:
-        cmd = ['ffmpeg', '-y', '-ss', cut_at, '-i', input_path,
-               '-c', 'copy', output_path]
+    cmd = ['ffmpeg', '-y']
+    if start:
+        cmd += ['-ss', start]
+    cmd += ['-i', input_path]
+    if end:
+        cmd += ['-to', end]
+    cmd += ['-c', 'copy', output_path]
 
     r = subprocess.run(cmd, capture_output=True)
     cleanup_later(input_path)

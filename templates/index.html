@@ -405,7 +405,7 @@
   <div id="panel-trim" class="panel">
     <div class="card">
       <h2>Trim Video</h2>
-      <p class="desc">Cut your video at a specific timestamp and keep either the portion before or after the cut point.</p>
+      <p class="desc">Set a start and/or end time to extract the part of the video you want. Leave either field blank to keep from the very beginning or through to the very end.</p>
 
       <div class="dropzone" id="dz-trim" onclick="document.getElementById('f-trim').click()">
         <div class="dz-icon">🎥</div>
@@ -416,25 +416,19 @@
         <input type="file" id="f-trim" accept="video/*" style="display:none" onchange="onFile(this,'trim')">
       </div>
 
-      <div class="field">
-        <label>Cut At</label>
-        <input type="text" id="trm-cut" placeholder="e.g. 6:07 or 367">
-        <div class="hint">Format: mm:ss &nbsp;·&nbsp; h:mm:ss &nbsp;·&nbsp; or plain seconds</div>
-      </div>
-
-      <div class="field">
-        <label>Keep</label>
-        <div class="radio-group">
-          <div class="radio-opt">
-            <input type="radio" name="trm-keep" id="trm-before" value="before" checked>
-            <label for="trm-before">⬅️ Before cut point</label>
-          </div>
-          <div class="radio-opt">
-            <input type="radio" name="trm-keep" id="trm-after" value="after">
-            <label for="trm-after">➡️ After cut point</label>
-          </div>
+      <div style="display:flex;gap:14px;">
+        <div class="field" style="flex:1">
+          <label>Start Time <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
+          <input type="text" id="trm-start" placeholder="e.g. 0:30">
+          <div class="hint">Leave blank to keep from the beginning</div>
+        </div>
+        <div class="field" style="flex:1">
+          <label>End Time <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
+          <input type="text" id="trm-end" placeholder="e.g. 4:15">
+          <div class="hint">Leave blank to keep to the end</div>
         </div>
       </div>
+      <div class="hint" style="margin-top:-10px;margin-bottom:18px;">Format: mm:ss &nbsp;·&nbsp; h:mm:ss &nbsp;·&nbsp; or plain seconds</div>
 
       <button class="submit-btn" onclick="submit('trim')">Trim Video</button>
       <div class="progress-wrap" id="pw-trim">
@@ -710,14 +704,14 @@ function submit(tab) {
     form.append('target_mb', sz);
 
   } else if (tab === 'trim') {
-    const file = document.getElementById('f-trim').files[0];
+    const file  = document.getElementById('f-trim').files[0];
     if (!file) return alert('Please select a video first.');
-    const cut  = document.getElementById('trm-cut').value.trim();
-    const keep = document.querySelector('input[name="trm-keep"]:checked').value;
-    if (!cut) return alert('Please enter a cut point.');
-    form.append('video',  file);
-    form.append('cut_at', cut);
-    form.append('keep',   keep);
+    const start = document.getElementById('trm-start').value.trim();
+    const end   = document.getElementById('trm-end').value.trim();
+    if (!start && !end) return alert('Please enter a start time, end time, or both.');
+    form.append('video', file);
+    if (start) form.append('start', start);
+    if (end)   form.append('end',   end);
 
   } else if (tab === 'merge') {
     if (mergeFiles.length < 2) return alert('Please select at least 2 videos.');
