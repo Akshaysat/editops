@@ -847,13 +847,25 @@ function submit(tab) {
     showProgress(tab, pct, 'Uploading…');
   };
 
-  // Upload finished — switch to processing state
+  // Upload finished — switch to processing state with fake % counter
   xhr.upload.onload = () => {
     document.getElementById('pl-' + tab).textContent = 'Processing…';
-    document.getElementById('pp-' + tab).textContent = '';
     const pf = document.getElementById('pf-' + tab);
+    const pp = document.getElementById('pp-' + tab);
     pf.style.transition = 'width 90s linear';
     pf.style.width = '88%';
+    pp.textContent = '50%';
+
+    const startTime = Date.now();
+    if (pf._ticker) clearInterval(pf._ticker);
+    pf._ticker = setInterval(() => {
+      if (!document.getElementById('pw-' + tab).classList.contains('visible')) {
+        clearInterval(pf._ticker);
+        return;
+      }
+      const elapsed = Math.min(Date.now() - startTime, 90000);
+      pp.textContent = Math.round(50 + elapsed / 90000 * 38) + '%';
+    }, 250);
   };
 
   xhr.onload = () => {
