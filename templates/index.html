@@ -8,79 +8,114 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg:           #0d1117;
-      --surface:      #161b22;
-      --border:       #30363d;
-      --accent:       #58a6ff;
-      --accent-hover: #79b8ff;
-      --text:         #e6edf3;
-      --muted:        #8b949e;
-      --success:      #3fb950;
-      --error:        #f85149;
-      --radius:       10px;
+      --sidebar-w:  224px;
+      --bg:         #F6F6F6;
+      --surface:    #FFFFFF;
+      --border:     #E8E8E8;
+      --border-2:   #D0D0D0;
+      --text:       #111111;
+      --muted:      #888888;
+      --success:    #1A8C3F;
+      --error:      #C92A2A;
+      --radius:     10px;
+      --sb-bg:      #0E0E0E;
+      --sb-text:    rgba(255,255,255,0.6);
+      --sb-active:  #FFFFFF;
     }
 
+    html, body { height: 100%; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       background: var(--bg);
       color: var(--text);
-      min-height: 100vh;
+      display: flex;
     }
 
-    /* ── Header ── */
-    header {
-      padding: 14px 32px;
-      border-bottom: 1px solid var(--border);
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-height: 100vh;
+      background: var(--sb-bg);
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      left: 0; top: 0;
+      z-index: 100;
+      border-right: 1px solid #1C1C1C;
+    }
+    .sidebar-brand {
+      padding: 22px 18px 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .sidebar-brand .logo {
+      font-size: 15px;
+      font-weight: 700;
+      color: #FFFFFF;
+      display: block;
+      letter-spacing: -0.2px;
+    }
+    .sidebar-brand .brand {
+      font-size: 10.5px;
+      color: rgba(255,255,255,0.28);
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      display: block;
+      margin-top: 4px;
+    }
+    .sidebar-nav { padding: 10px 10px; flex: 1; overflow-y: auto; }
+    .nav-section {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: rgba(255,255,255,0.2);
+      padding: 12px 10px 5px;
+    }
+    .nav-item {
       display: flex;
       align-items: center;
-      gap: 12px;
-      position: sticky;
-      top: 0;
-      background: var(--bg);
-      z-index: 10;
-    }
-    .logo { font-size: 18px; font-weight: 700; }
-    .brand {
-      font-size: 12px;
-      color: var(--muted);
-      background: var(--surface);
-      padding: 2px 10px;
-      border-radius: 100px;
-      border: 1px solid var(--border);
-      letter-spacing: 0.3px;
-    }
-
-    /* ── Layout ── */
-    .container { max-width: 680px; margin: 36px auto; padding: 0 20px 60px; }
-
-    /* ── Tabs ── */
-    .tabs {
-      display: flex;
-      gap: 4px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 4px;
-      margin-bottom: 24px;
-    }
-    .tab-btn {
-      flex: 1;
-      padding: 9px 4px;
+      gap: 9px;
+      width: 100%;
+      padding: 8px 10px;
       border: none;
       background: transparent;
-      color: var(--muted);
+      color: var(--sb-text);
       font-size: 13px;
       font-weight: 500;
       border-radius: 7px;
       cursor: pointer;
-      transition: all 0.15s;
-      white-space: nowrap;
+      transition: all 0.12s;
+      text-align: left;
+      margin-bottom: 1px;
     }
-    .tab-btn:hover:not(.active) { color: var(--text); }
-    .tab-btn.active {
+    .nav-item:hover:not(.active) {
+      background: rgba(255,255,255,0.07);
+      color: rgba(255,255,255,0.85);
+    }
+    .nav-item.active {
+      background: #FFFFFF;
+      color: #0E0E0E;
+      font-weight: 600;
+    }
+    .nav-item .ni { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+    .sidebar-footer {
+      padding: 14px 18px;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      font-size: 11px;
+      color: rgba(255,255,255,0.18);
+    }
+
+    /* ── Main ── */
+    .main {
+      margin-left: var(--sidebar-w);
+      min-height: 100vh;
+      flex: 1;
       background: var(--bg);
-      color: var(--text);
-      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    .content {
+      max-width: 660px;
+      margin: 0 auto;
+      padding: 36px 24px 80px;
     }
 
     /* ── Panel ── */
@@ -93,13 +128,25 @@
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 28px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.04), 0 0 0 0 transparent;
     }
-    .card h2 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
-    .card .desc { font-size: 13px; color: var(--muted); margin-bottom: 24px; line-height: 1.5; }
+    .card h2 {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 5px;
+      letter-spacing: -0.2px;
+    }
+    .card .desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 24px;
+      line-height: 1.55;
+    }
 
     /* ── Drop Zone ── */
     .dropzone {
-      border: 2px dashed var(--border);
+      border: 1.5px dashed var(--border-2);
       border-radius: var(--radius);
       padding: 28px 20px;
       text-align: center;
@@ -107,20 +154,21 @@
       transition: all 0.15s;
       margin-bottom: 22px;
       user-select: none;
+      background: #FAFAFA;
     }
     .dropzone:hover, .dropzone.dragover {
-      border-color: var(--accent);
-      background: rgba(88,166,255,0.05);
+      border-color: var(--text);
+      background: rgba(0,0,0,0.02);
     }
-    .dropzone .dz-icon { font-size: 30px; margin-bottom: 8px; }
+    .dropzone .dz-icon { font-size: 28px; margin-bottom: 8px; }
     .dropzone .dz-label { font-size: 14px; color: var(--muted); }
-    .dropzone .dz-label b { color: var(--accent); text-decoration: underline; }
+    .dropzone .dz-label b { color: var(--text); text-decoration: underline; }
     .dropzone .dz-file-info {
       display: none;
       margin-top: 8px;
       font-size: 13px;
       color: var(--success);
-      font-weight: 500;
+      font-weight: 600;
     }
     .dropzone.has-file .dz-file-info { display: block; }
     .dropzone.has-file .dz-default { display: none; }
@@ -129,17 +177,17 @@
     .field { margin-bottom: 18px; }
     .field label {
       display: block;
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 11px;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--muted);
+      letter-spacing: 0.6px;
+      color: #AAAAAA;
       margin-bottom: 7px;
     }
     .field input[type=text],
     .field input[type=number] {
       width: 100%;
-      background: var(--bg);
+      background: #FAFAFA;
       border: 1px solid var(--border);
       border-radius: 7px;
       padding: 9px 13px;
@@ -147,8 +195,8 @@
       font-size: 14px;
       transition: border-color 0.15s;
     }
-    .field input:focus { outline: none; border-color: var(--accent); }
-    .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+    .field input:focus { outline: none; border-color: var(--text); }
+    .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
 
     /* ── Radio Group ── */
     .radio-group { display: flex; gap: 8px; }
@@ -169,17 +217,19 @@
       font-weight: normal;
       text-transform: none;
       letter-spacing: 0;
+      background: #FAFAFA;
     }
     .radio-opt input:checked + label {
-      border-color: var(--accent);
-      color: var(--accent);
-      background: rgba(88,166,255,0.08);
+      border-color: var(--text);
+      color: var(--text);
+      background: rgba(0,0,0,0.04);
+      font-weight: 600;
     }
 
     /* ── Presets ── */
     .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
     .preset {
-      padding: 4px 12px;
+      padding: 5px 13px;
       border: 1px solid var(--border);
       border-radius: 100px;
       background: transparent;
@@ -188,7 +238,7 @@
       cursor: pointer;
       transition: all 0.15s;
     }
-    .preset:hover { border-color: var(--accent); color: var(--accent); }
+    .preset:hover { border-color: var(--text); color: var(--text); }
 
     /* ── Conditional Sections ── */
     .cond { display: none; }
@@ -198,34 +248,40 @@
     .submit-btn {
       width: 100%;
       padding: 12px;
-      background: var(--accent);
-      color: #0d1117;
+      background: var(--text);
+      color: #FFFFFF;
       border: none;
       border-radius: var(--radius);
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 700;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: opacity 0.15s;
       margin-top: 6px;
-      letter-spacing: 0.2px;
+      letter-spacing: 0.1px;
     }
-    .submit-btn:hover { background: var(--accent-hover); }
-    .submit-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .submit-btn:hover { opacity: 0.82; }
+    .submit-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
     /* ── Progress ── */
-    .progress-wrap { display: none; margin-top: 18px; }
+    .progress-wrap { display: none; margin-top: 20px; }
     .progress-wrap.visible { display: block; }
     .progress-meta {
       display: flex;
       justify-content: space-between;
-      font-size: 13px;
+      font-size: 12px;
       color: var(--muted);
-      margin-bottom: 7px;
+      margin-bottom: 8px;
+      font-weight: 500;
     }
-    .progress-bar { height: 4px; background: var(--border); border-radius: 100px; overflow: hidden; }
+    .progress-bar {
+      height: 3px;
+      background: var(--border);
+      border-radius: 100px;
+      overflow: hidden;
+    }
     .progress-fill {
       height: 100%;
-      background: var(--accent);
+      background: var(--text);
       border-radius: 100px;
       width: 0%;
       transition: width 0.25s ease;
@@ -236,36 +292,44 @@
       display: none;
       margin-top: 18px;
       padding: 18px;
-      border: 1px solid var(--success);
+      border: 1px solid #B8DFC4;
       border-radius: var(--radius);
-      background: rgba(63,185,80,0.07);
+      background: #F0FAF3;
       text-align: center;
     }
     .result-box.visible { display: block; }
-    .result-box .result-title { font-size: 15px; font-weight: 600; color: var(--success); margin-bottom: 12px; }
+    .result-box .result-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--success);
+      margin-bottom: 12px;
+    }
     .download-btn {
       display: inline-block;
       padding: 9px 22px;
-      background: var(--success);
-      color: #0d1117;
+      background: var(--text);
+      color: #FFFFFF;
       border-radius: 7px;
       font-weight: 700;
-      font-size: 14px;
+      font-size: 13px;
       text-decoration: none;
       cursor: pointer;
       border: none;
+      transition: opacity 0.15s;
     }
+    .download-btn:hover { opacity: 0.8; }
 
     /* ── Error ── */
     .error-box {
       display: none;
       margin-top: 18px;
-      padding: 13px 16px;
-      border: 1px solid var(--error);
+      padding: 12px 16px;
+      border: 1px solid #F5C0C0;
       border-radius: var(--radius);
-      background: rgba(248,81,73,0.07);
+      background: #FDF3F3;
       color: var(--error);
       font-size: 13px;
+      line-height: 1.5;
     }
     .error-box.visible { display: block; }
 
@@ -276,8 +340,9 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       margin-top: 14px;
-      padding: 6px 4px;
+      padding: 4px;
       font-size: 13px;
+      background: #FAFAFA;
     }
     .tr-seg {
       display: flex;
@@ -286,16 +351,18 @@
       border-radius: 5px;
       line-height: 1.5;
     }
-    .tr-seg:hover { background: rgba(88,166,255,0.06); }
+    .tr-seg:hover { background: rgba(0,0,0,0.03); }
     .tr-ts {
-      color: var(--accent);
+      color: #AAAAAA;
       font-family: ui-monospace, 'SF Mono', monospace;
-      font-size: 11.5px;
+      font-size: 11px;
       white-space: nowrap;
       flex-shrink: 0;
       padding-top: 2px;
       min-width: 145px;
+      cursor: pointer;
     }
+    .tr-ts:hover { color: var(--text); text-decoration: underline; }
     .tr-txt {
       color: var(--text);
       flex: 1;
@@ -305,24 +372,22 @@
       min-width: 0;
       word-break: break-word;
     }
-    .tr-txt[contenteditable]:hover { background: rgba(255,255,255,0.04); }
+    .tr-txt[contenteditable]:hover { background: rgba(0,0,0,0.03); }
     .tr-txt[contenteditable]:focus {
-      background: rgba(88,166,255,0.08);
-      box-shadow: 0 0 0 1px var(--accent);
+      background: rgba(0,0,0,0.05);
+      box-shadow: 0 0 0 1.5px var(--text);
+      border-radius: 3px;
     }
     .tr-active {
-      background: rgba(88,166,255,0.13) !important;
-      box-shadow: inset 3px 0 0 var(--accent);
+      background: rgba(0,0,0,0.05) !important;
+      box-shadow: inset 2.5px 0 0 var(--text);
     }
-    .tr-ts {
-      cursor: pointer;
-    }
-    .tr-ts:hover { color: var(--accent-hover); text-decoration: underline; }
     .tr-player-wrap {
-      margin-bottom: 14px;
+      margin-bottom: 16px;
       border-radius: 8px;
       overflow: hidden;
       background: #000;
+      border: 1px solid var(--border);
     }
     .tr-player-wrap video { width: 100%; max-height: 280px; display: block; }
     .tr-player-wrap audio { width: 100%; display: block; }
@@ -353,7 +418,7 @@
       align-items: center;
       gap: 10px;
       padding: 9px 13px;
-      background: var(--bg);
+      background: #FAFAFA;
       border: 1px solid var(--border);
       border-radius: 7px;
       margin-bottom: 6px;
@@ -361,14 +426,14 @@
       transition: border-color 0.15s, background 0.15s, opacity 0.15s;
       cursor: default;
     }
-    .merge-item.drag-over { border-color: var(--accent); background: rgba(88,166,255,0.08); }
+    .merge-item.drag-over { border-color: var(--text); background: rgba(0,0,0,0.03); }
     .merge-item.dragging  { opacity: 0.35; }
-    .merge-item .mi-drag  { color: var(--muted); cursor: grab; font-size: 15px; user-select: none; flex-shrink: 0; }
+    .merge-item .mi-drag  { color: #CCCCCC; cursor: grab; font-size: 15px; user-select: none; flex-shrink: 0; }
     .merge-item .mi-idx   { color: var(--muted); font-size: 12px; min-width: 20px; }
     .merge-item .mi-name  { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .merge-item .mi-size  { color: var(--muted); font-size: 12px; white-space: nowrap; }
     .merge-item .mi-remove {
-      background: none; border: none; color: var(--muted);
+      background: none; border: none; color: #CCCCCC;
       cursor: pointer; font-size: 18px; line-height: 1; padding: 0 2px; flex-shrink: 0;
     }
     .merge-item .mi-remove:hover { color: var(--error); }
@@ -379,23 +444,28 @@
 </head>
 <body>
 
-<header>
-  <span class="logo">🎬 EditOps</span>
-  <span class="brand">Money Mediia</span>
-</header>
-
-<div class="container">
-
-  <!-- Tab bar -->
-  <div class="tabs">
-    <button class="tab-btn active" data-tab="speed"    onclick="switchTab(this,'speed')">⚡ Speed Up</button>
-    <button class="tab-btn"        data-tab="compress" onclick="switchTab(this,'compress')">📦 Compress</button>
-    <button class="tab-btn"        data-tab="trim"     onclick="switchTab(this,'trim')">✂️ Trim</button>
-    <button class="tab-btn"        data-tab="merge"    onclick="switchTab(this,'merge')">🔗 Merge</button>
-    <button class="tab-btn"        data-tab="convert"  onclick="switchTab(this,'convert')">🔄 Convert</button>
-    <button class="tab-btn"        data-tab="transcribe" onclick="switchTab(this,'transcribe')">🎤 Transcribe</button>
-    <button class="tab-btn"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')">▶️ YouTube</button>
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <span class="logo">✦ EditOps</span>
+    <span class="brand">Money Mediia</span>
   </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">Edit</div>
+    <button class="nav-item active" data-tab="speed"     onclick="switchTab(this,'speed')"><span class="ni">⚡</span> Speed Up</button>
+    <button class="nav-item"        data-tab="compress"  onclick="switchTab(this,'compress')"><span class="ni">◈</span> Compress</button>
+    <button class="nav-item"        data-tab="trim"      onclick="switchTab(this,'trim')"><span class="ni">✂</span> Trim</button>
+    <button class="nav-item"        data-tab="merge"     onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
+    <button class="nav-item"        data-tab="convert"   onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
+    <div class="nav-section">Subtitles</div>
+    <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
+    <div class="nav-section">Download</div>
+    <button class="nav-item"        data-tab="ytdl"      onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
+  </nav>
+  <div class="sidebar-footer">EditOps v1.0</div>
+</aside>
+
+<main class="main">
+<div class="content">
 
   <!-- ══ SPEED UP ══ -->
   <div id="panel-speed" class="panel active">
@@ -507,7 +577,7 @@
       <div id="trim-preview" style="display:none;margin-bottom:22px;">
         <video id="trim-video" controls style="width:100%;border-radius:var(--radius);background:#000;max-height:280px;display:block;"></video>
         <audio id="trim-audio" controls style="width:100%;display:none;margin-top:4px;"></audio>
-        <div style="text-align:center;margin-top:8px;font-family:monospace;font-size:18px;font-weight:600;letter-spacing:1px;color:var(--accent);" id="trim-timecode">0:00.000</div>
+        <div style="text-align:center;margin-top:8px;font-family:monospace;font-size:18px;font-weight:600;letter-spacing:1px;color:var(--text);" id="trim-timecode">0:00.000</div>
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('start')">⬅ Set as Start Time</button>
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('end')">Set as End Time ➡</button>
@@ -581,7 +651,7 @@
 
       <div class="field">
         <label>Language</label>
-        <select id="tr-lang" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+        <select id="tr-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
           <option value="">Auto-detect</option>
           <option value="en">English</option>
           <option value="hi">Hindi</option>
@@ -602,7 +672,7 @@
       </div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-bottom:18px;cursor:pointer;user-select:none;">
-        <input type="checkbox" id="tr-romanize" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;">
+        <input type="checkbox" id="tr-romanize" style="width:15px;height:15px;accent-color:var(--text);cursor:pointer;">
         <span style="font-size:14px;">Romanize Hindi/Urdu text <span style="color:var(--muted);font-size:12px;">(Devanagari → Roman script, good for Hinglish)</span></span>
       </label>
 
@@ -732,7 +802,8 @@
     </div>
   </div>
 
-</div>
+</div><!-- .content -->
+</main>
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
@@ -744,7 +815,7 @@ let dragSrcIdx = null;
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(btn, tab) {
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
