@@ -73,11 +73,18 @@ APPLESCRIPT
 osacompile -o EditOps.app "$TMP_SCRIPT"
 rm -f "$TMP_SCRIPT"
 
-# Apply branded icon (replaces osacompile's default applet icon)
+# Apply branded icon
 echo "🎨  Applying app icon..."
-python3 make_icon.py
-cp EditOps.app/Contents/Resources/AppIcon.icns \
-   EditOps.app/Contents/Resources/applet.icns 2>/dev/null || true
+python3 make_icon.py  # saves AppIcon.icns into the app bundle
+
+# Point Info.plist to our icon name so Finder has no stale cache for it
+plutil -replace CFBundleIconFile -string AppIcon \
+  EditOps.app/Contents/Info.plist 2>/dev/null || true
+
+# Force Finder to pick up the new icon immediately
+touch EditOps.app
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+  -f EditOps.app 2>/dev/null || true
 
 # Remove quarantine so macOS doesn't block the app
 xattr -cr EditOps.app 2>/dev/null
