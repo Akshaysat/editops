@@ -42,9 +42,16 @@ def auto_update():
         subprocess.run(['git', 'pull', 'origin', 'main'],
                        cwd=repo_dir, capture_output=True, timeout=30)
 
+        # Re-install dependencies in case requirements.txt changed
+        pip = os.path.join(repo_dir, 'venv', 'bin', 'pip')
+        if os.path.exists(pip):
+            print('📦  Updating dependencies...')
+            subprocess.run([pip, 'install', '-r',
+                            os.path.join(repo_dir, 'requirements.txt'), '-q'],
+                           cwd=repo_dir, timeout=120)
+
         print('🔁  Restarting app with latest version...\n')
         time.sleep(1)
-        # Restart the current process with the same arguments
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     except Exception as e:
