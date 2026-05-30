@@ -394,7 +394,6 @@
     <button class="tab-btn"        data-tab="merge"    onclick="switchTab(this,'merge')">🔗 Merge</button>
     <button class="tab-btn"        data-tab="convert"  onclick="switchTab(this,'convert')">🔄 Convert</button>
     <button class="tab-btn"        data-tab="transcribe" onclick="switchTab(this,'transcribe')">🎤 Transcribe</button>
-    <button class="tab-btn"        data-tab="align"      onclick="switchTab(this,'align')">🎯 Force Align</button>
     <button class="tab-btn"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')">▶️ YouTube</button>
   </div>
 
@@ -602,12 +601,6 @@
         <div class="hint">Specifying the language improves accuracy. Auto-detect works well for most content.</div>
       </div>
 
-      <div class="field">
-        <label>Script / Talking Points <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
-        <textarea id="tr-prompt" rows="4" placeholder="Paste a rough script, key terms, names, or topic notes here. Whisper will use this as context to improve accuracy and spelling — especially useful for Hinglish content or uncommon names." style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 13px;color:var(--text);font-size:13px;resize:vertical;line-height:1.6;font-family:inherit;"></textarea>
-        <div class="hint">Not the exact script? No problem — even rough notes help. For exact word-for-word scripts, use the Force Align tab instead.</div>
-      </div>
-
       <label style="display:flex;align-items:center;gap:10px;margin-bottom:18px;cursor:pointer;user-select:none;">
         <input type="checkbox" id="tr-romanize" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;">
         <span style="font-size:14px;">Romanize Hindi/Urdu text <span style="color:var(--muted);font-size:12px;">(Devanagari → Roman script, good for Hinglish)</span></span>
@@ -625,52 +618,6 @@
       </div>
       <div class="result-box" id="rb-transcribe"></div>
       <div class="error-box"  id="eb-transcribe"></div>
-    </div>
-  </div>
-
-  <!-- ══ FORCE ALIGN ══ -->
-  <div id="panel-align" class="panel">
-    <div class="card">
-      <h2>Force Align Script to Audio</h2>
-      <p class="desc">Have the exact script? Upload the video or audio and paste the script — we'll generate precise timestamps without re-transcribing. Great for scripted content where accuracy matters.</p>
-
-      <div class="dropzone" id="dz-align" onclick="document.getElementById('f-align').click()">
-        <div class="dz-icon">🎙️</div>
-        <div class="dz-default">
-          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
-        </div>
-        <div class="dz-file-info" id="fi-align"></div>
-        <input type="file" id="f-align" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'align')">
-      </div>
-
-      <div class="field">
-        <label>Exact Script <span style="color:var(--error);font-size:11px;">required</span></label>
-        <textarea id="al-script" rows="8" placeholder="Paste your word-for-word script here. The aligner maps exactly what you write to the audio timeline — so spelling and word order should match what's spoken." style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:10px 13px;color:var(--text);font-size:13px;resize:vertical;line-height:1.6;font-family:inherit;"></textarea>
-        <div class="hint">Works best when the script closely matches what was actually spoken. Minor ad-libs are fine.</div>
-      </div>
-
-      <div class="field">
-        <label>Script Language</label>
-        <select id="al-lang" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
-          <option value="eng">English / Roman Hinglish</option>
-          <option value="hin">Hindi (Devanagari)</option>
-          <option value="urd">Urdu</option>
-        </select>
-        <div class="hint">Choose based on the script's script (writing system), not the spoken language.</div>
-      </div>
-
-      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
-        ⚡ Runs on your M-series chip via MPS GPU<br>
-        📦 First run downloads the alignment model (~360 MB, cached after that)
-      </div>
-
-      <button class="submit-btn" onclick="submitAlign()">Align Script</button>
-      <div class="progress-wrap" id="pw-align">
-        <div class="progress-meta"><span id="pl-align">Uploading…</span><span id="pp-align">0%</span></div>
-        <div class="progress-bar"><div class="progress-fill" id="pf-align"></div></div>
-      </div>
-      <div class="result-box" id="rb-align"></div>
-      <div class="error-box"  id="eb-align"></div>
     </div>
   </div>
 
@@ -1171,15 +1118,13 @@ function submitTranscribe() {
   if (!file) return alert('Please select a video or audio file first.');
   const lang     = document.getElementById('tr-lang').value;
   const romanize = document.getElementById('tr-romanize').checked;
-  const prompt   = document.getElementById('tr-prompt').value.trim();
 
   resetUI('transcribe');
 
   const form = new FormData();
   form.append('file', file);
-  if (lang)    form.append('language', lang);
+  if (lang) form.append('language', lang);
   if (romanize) form.append('romanize', '1');
-  if (prompt)  form.append('prompt', prompt);
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/transcribe');
@@ -1380,133 +1325,6 @@ function downloadTranscript() {
   a.download = _trFilename;
   a.click();
   URL.revokeObjectURL(url);
-}
-
-// ── Force Align ────────────────────────────────────────────────────────────
-function submitAlign() {
-  const file   = document.getElementById('f-align').files[0];
-  const script = document.getElementById('al-script').value.trim();
-  const lang   = document.getElementById('al-lang').value;
-  if (!file)   return alert('Please select a video or audio file first.');
-  if (!script) return alert('Please paste your script first.');
-
-  resetUI('align');
-
-  const form = new FormData();
-  form.append('file',     file);
-  form.append('script',   script);
-  form.append('language', lang);
-
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/align');
-  xhr.responseType = 'json';
-
-  showProgress('align', 0, 'Uploading…');
-
-  xhr.upload.onprogress = e => {
-    if (!e.lengthComputable) return;
-    showProgress('align', Math.round(e.loaded / e.total * 30), 'Uploading…');
-  };
-
-  xhr.upload.onload = () => showProgress('align', 35, 'Starting alignment…');
-
-  xhr.onload = () => {
-    if (xhr.status !== 200) {
-      showError('align', (xhr.response && xhr.response.error) || 'Upload failed.');
-      return;
-    }
-    pollAlign(xhr.response.task_id, Date.now());
-  };
-
-  xhr.onerror = () => showError('align', 'Network error — is the server running?');
-  xhr.send(form);
-}
-
-function pollAlign(taskId, startTime) {
-  const pf = document.getElementById('pf-align');
-  const pp = document.getElementById('pp-align');
-  const pl = document.getElementById('pl-align');
-
-  const interval = setInterval(async () => {
-    if (!document.getElementById('pw-align').classList.contains('visible')) {
-      clearInterval(interval); return;
-    }
-    let data;
-    try {
-      const res = await fetch('/align/status/' + taskId);
-      data = await res.json();
-    } catch {
-      clearInterval(interval);
-      showError('align', 'Lost connection to server.');
-      return;
-    }
-
-    if (!data || data.status === 'processing') {
-      const elapsed = Math.min(Date.now() - startTime, 180000);
-      const pct = Math.round(35 + elapsed / 180000 * 55);
-      pl.textContent = (data && data.progress) ? data.progress : 'Aligning…';
-      pp.textContent = pct + '%';
-      pf.style.width = pct + '%';
-      return;
-    }
-
-    clearInterval(interval);
-
-    if (data.status === 'done') {
-      _trSegs     = (data.segments || []).map(s => ({...s}));
-      _trSegsOrig = (data.segments || []).map(s => ({...s}));
-      _trFilename = data.filename || 'aligned.srt';
-      document.getElementById('pw-align').classList.remove('visible');
-
-      // Render result into the align panel
-      const rb = document.getElementById('rb-align');
-      const fileInput = document.getElementById('f-align');
-      const file = fileInput.files[0];
-
-      let playerHtml = '';
-      if (file) {
-        const tag = file.type.startsWith('video/') ? 'video' : 'audio';
-        playerHtml = `<div class="tr-player-wrap"><${tag} id="tr-player" controls></${tag}></div>`;
-      }
-
-      let previewHtml = '';
-      if (_trSegs.length > 0) {
-        const rows = _trSegs.map((s, i) =>
-          `<div class="tr-seg" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
-          `<span class="tr-ts" onclick="trSeek(${s.start})" title="Click to jump here">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
-          `<span class="tr-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</span>` +
-          `</div>`
-        ).join('');
-        previewHtml =
-          `<div class="tr-preview" id="tr-preview">${rows}</div>` +
-          `<div class="tr-toolbar">` +
-          `<span class="tr-hint">✏️ Click any line to edit · Click timestamp to seek</span>` +
-          `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
-          `</div>`;
-      }
-
-      rb.innerHTML = `
-        <div class="result-title">✓ Alignment complete! (${_trSegs.length} segments)</div>
-        ${playerHtml}
-        <button class="download-btn" onclick="downloadTranscript()" style="margin-bottom:14px">⬇ Download .srt file</button>
-        ${previewHtml}`;
-      rb.classList.add('visible');
-
-      if (file) {
-        const player  = document.getElementById('tr-player');
-        player.src    = URL.createObjectURL(file);
-        player.addEventListener('timeupdate', () => updateTrHighlight(player.currentTime));
-      }
-
-      rb.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
-        el.addEventListener('input', () => {
-          _trSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
-        });
-      });
-    } else {
-      showError('align', data.error || 'Alignment failed.');
-    }
-  }, 2000);
 }
 
 function srtTimestamp(s) {

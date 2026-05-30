@@ -517,9 +517,8 @@ def transcribe_route():
     if not file:
         return jsonify(error='No file uploaded'), 400
 
-    language      = request.form.get('language') or None
-    romanize      = request.form.get('romanize') == '1'
-    initial_prompt = request.form.get('prompt', '').strip() or None
+    language = request.form.get('language') or None
+    romanize = request.form.get('romanize') == '1'
     input_path, uid = save_upload(file, fallback_ext='.mp4')
     original_stem = stem(file.filename)
     _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
@@ -543,7 +542,6 @@ def transcribe_route():
                 wav_path,
                 path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
                 language=language,
-                initial_prompt=initial_prompt,
                 verbose=False,
             )
 
@@ -595,129 +593,6 @@ def transcribe_result(task_id):
         return jsonify(error='Result not ready'), 404
     path     = task['result']
     filename = task.get('filename', 'transcript.srt')
-    cleanup_later(path, delay=300)
-    _tasks.pop(task_id, None)
-    return send_file(path, as_attachment=True, download_name=filename,
-                     mimetype='text/plain')
-
-
-# ── Force Alignment ──────────────────────────────────────────────────────────
-
-def words_to_srt_segments(word_timestamps, max_chars=50):
-    """Group word-level timestamps into subtitle-sized segments."""
-    segments, current = [], []
-    for w in word_timestamps:
-        current.append(w)
-        if sum(len(x['text']) + 1 for x in current) >= max_chars:
-            segments.append({
-                'start': current[0]['start'],
-                'end':   current[-1]['end'],
-                'text':  ' '.join(x['text'] for x in current).strip(),
-            })
-            current = []
-    if current:
-        segments.append({
-            'start': current[0]['start'],
-            'end':   current[-1]['end'],
-            'text':  ' '.join(x['text'] for x in current).strip(),
-        })
-    return segments
-
-
-@app.route('/align', methods=['POST'])
-def align_route():
-    file   = request.files.get('file')
-    script = request.form.get('script', '').strip()
-    language = request.form.get('language', 'eng')
-
-    if not file:
-        return jsonify(error='No file uploaded'), 400
-    if not script:
-        return jsonify(error='No script provided'), 400
-
-    input_path, uid = save_upload(file, fallback_ext='.mp4')
-    original_stem = stem(file.filename)
-    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
-
-    def run():
-        wav_path = os.path.join(TEMP_DIR, f'vt_al_{uid}.wav')
-        try:
-            r = subprocess.run(
-                ['ffmpeg', '-y', '-i', input_path,
-                 '-ar', '16000', '-ac', '1', '-f', 'wav', wav_path],
-                capture_output=True)
-            if r.returncode != 0:
-                _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from file.'}
-                cleanup_later(input_path)
-                return
-
-            _tasks[uid]['progress'] = 'Loading alignment model… (first run downloads ~360 MB)'
-
-            import onnxruntime
-            from ctc_forced_aligner import (
-                load_audio, ensure_onnx_model, generate_emissions,
-                preprocess_text, get_alignments, get_spans, postprocess_results,
-                Tokenizer, MODEL_URL,
-            )
-
-            model_path = os.path.join(
-                os.path.expanduser('~'), '.cache', 'ctc_forced_aligner', 'model.onnx')
-            ensure_onnx_model(model_path, MODEL_URL)
-            session   = onnxruntime.InferenceSession(model_path)
-            tokenizer = Tokenizer()
-
-            audio = load_audio(wav_path, ret_type='np')
-
-            _tasks[uid]['progress'] = 'Aligning script to audio…'
-
-            emissions, stride = generate_emissions(session, audio)
-            tokens_starred, text_starred = preprocess_text(
-                script, romanize=False, language=language)
-            segments_raw, scores, blank_token = get_alignments(
-                emissions, tokens_starred, tokenizer)
-            spans  = get_spans(tokens_starred, segments_raw, blank_token)
-            word_ts = postprocess_results(text_starred, spans, stride, scores)
-
-            segs = words_to_srt_segments(word_ts)
-
-            srt_path = os.path.join(TEMP_DIR, f'vt_al_{uid}.srt')
-            with open(srt_path, 'w', encoding='utf-8') as f:
-                f.write(segments_to_srt(segs))
-
-            _tasks[uid] = {
-                'status':   'done',
-                'result':   srt_path,
-                'filename': f'{original_stem}.srt',
-                'segments': segs,
-            }
-            cleanup_later(wav_path)
-            cleanup_later(input_path)
-
-        except Exception as e:
-            _tasks[uid] = {'status': 'error', 'error': str(e)[:400]}
-            for p in [input_path, wav_path]:
-                try: cleanup_later(p)
-                except: pass
-
-    threading.Thread(target=run, daemon=True).start()
-    return jsonify(task_id=uid)
-
-
-@app.route('/align/status/<task_id>')
-def align_status(task_id):
-    task = _tasks.get(task_id)
-    if not task:
-        return jsonify(error='Task not found'), 404
-    return jsonify(task)
-
-
-@app.route('/align/result/<task_id>')
-def align_result(task_id):
-    task = _tasks.get(task_id)
-    if not task or task['status'] != 'done':
-        return jsonify(error='Result not ready'), 404
-    path     = task['result']
-    filename = task.get('filename', 'aligned.srt')
     cleanup_later(path, delay=300)
     _tasks.pop(task_id, None)
     return send_file(path, as_attachment=True, download_name=filename,
