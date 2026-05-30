@@ -40,9 +40,19 @@ source venv/bin/activate
 echo "📦  Checking Python dependencies..."
 pip install -r requirements.txt -q
 
+# Free port 5001 if a previous instance is still running
+if lsof -ti :5001 &>/dev/null; then
+  echo "🔄  Freeing port 5001 from previous session..."
+  lsof -ti :5001 | xargs kill -9
+  sleep 0.5
+fi
+
 # Launch app in background (auto-update runs inside app.py on startup)
 python app.py &
 SERVER_PID=$!
+
+# Kill Flask cleanly when this script exits (Ctrl+C or window close)
+trap "kill $SERVER_PID 2>/dev/null; exit" INT TERM EXIT
 
 # Wait until server is actually responding, then open browser
 echo "⏳  Waiting for server to start..."
