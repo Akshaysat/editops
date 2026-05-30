@@ -1,6 +1,8 @@
 from flask import Flask, request, render_template, send_file, jsonify
 import subprocess, os, uuid, json, tempfile, threading, time, sys, glob
 
+_tasks = {}   # task_id → {status, progress, result, filename, error}
+
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20 GB max upload
 
@@ -482,6 +484,119 @@ def ytdl_route():
 
     cleanup_later(output_path)
     return send_file(output_path, as_attachment=True, download_name=download_name)
+
+
+# ── Transcription ────────────────────────────────────────────────────────────
+
+def romanize_text(text):
+    """Convert Devanagari characters to Roman (ITRANS). Latin chars pass through unchanged."""
+    try:
+        from indic_transliteration import sanscript
+        from indic_transliteration.sanscript import transliterate
+        return transliterate(text, sanscript.DEVANAGARI, sanscript.ITRANS)
+    except Exception:
+        return text
+
+
+def segments_to_srt(segments):
+    def fmt(t):
+        h = int(t // 3600)
+        m = int((t % 3600) // 60)
+        s = int(t % 60)
+        ms = int(round((t % 1) * 1000))
+        return f'{h:02d}:{m:02d}:{s:02d},{ms:03d}'
+    lines = []
+    for i, seg in enumerate(segments, 1):
+        lines.append(f"{i}\n{fmt(seg['start'])} --> {fmt(seg['end'])}\n{seg['text'].strip()}\n")
+    return '\n'.join(lines)
+
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe_route():
+    file = request.files.get('file')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    language = request.form.get('language') or None
+    romanize = request.form.get('romanize') == '1'
+    input_path, uid = save_upload(file, fallback_ext='.mp4')
+    original_stem = stem(file.filename)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
+
+    def run():
+        wav_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.wav')
+        try:
+            r = subprocess.run(
+                ['ffmpeg', '-y', '-i', input_path,
+                 '-ar', '16000', '-ac', '1', '-f', 'wav', wav_path],
+                capture_output=True)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from file.'}
+                cleanup_later(input_path)
+                return
+
+            _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model ~1.6 GB)'
+
+            import mlx_whisper
+            result = mlx_whisper.transcribe(
+                wav_path,
+                path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
+                language=language,
+                verbose=False,
+            )
+
+            segs = [
+                {'start': s['start'], 'end': s['end'], 'text': s['text'].strip()}
+                for s in result.get('segments', [])
+            ]
+            if romanize:
+                _tasks[uid]['progress'] = 'Romanizing…'
+                for s in segs:
+                    s['text'] = romanize_text(s['text'])
+
+            srt_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.srt')
+            with open(srt_path, 'w', encoding='utf-8') as f:
+                f.write(segments_to_srt(segs))
+
+            _tasks[uid] = {
+                'status':   'done',
+                'result':   srt_path,
+                'filename': f'{original_stem}.srt',
+                'language': result.get('language', ''),
+                'segments': segs,
+            }
+            cleanup_later(wav_path)
+            cleanup_later(input_path)
+
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            for p in [input_path, wav_path]:
+                try: cleanup_later(p)
+                except: pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/transcribe/status/<task_id>')
+def transcribe_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify(task)
+
+
+@app.route('/transcribe/result/<task_id>')
+def transcribe_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task['status'] != 'done':
+        return jsonify(error='Result not ready'), 404
+    path     = task['result']
+    filename = task.get('filename', 'transcript.srt')
+    cleanup_later(path, delay=300)
+    _tasks.pop(task_id, None)
+    return send_file(path, as_attachment=True, download_name=filename,
+                     mimetype='text/plain')
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

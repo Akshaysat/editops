@@ -269,6 +269,83 @@
     }
     .error-box.visible { display: block; }
 
+    /* ── Transcript preview ── */
+    .tr-preview {
+      max-height: 320px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 14px;
+      padding: 6px 4px;
+      font-size: 13px;
+    }
+    .tr-seg {
+      display: flex;
+      gap: 12px;
+      padding: 5px 8px;
+      border-radius: 5px;
+      line-height: 1.5;
+    }
+    .tr-seg:hover { background: rgba(88,166,255,0.06); }
+    .tr-ts {
+      color: var(--accent);
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11.5px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      padding-top: 2px;
+      min-width: 145px;
+    }
+    .tr-txt {
+      color: var(--text);
+      flex: 1;
+      border-radius: 4px;
+      outline: none;
+      padding: 1px 4px;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .tr-txt[contenteditable]:hover { background: rgba(255,255,255,0.04); }
+    .tr-txt[contenteditable]:focus {
+      background: rgba(88,166,255,0.08);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .tr-active {
+      background: rgba(88,166,255,0.13) !important;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .tr-ts {
+      cursor: pointer;
+    }
+    .tr-ts:hover { color: var(--accent-hover); text-decoration: underline; }
+    .tr-player-wrap {
+      margin-bottom: 14px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+    }
+    .tr-player-wrap video { width: 100%; max-height: 280px; display: block; }
+    .tr-player-wrap audio { width: 100%; display: block; }
+    .tr-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .tr-hint { font-style: italic; }
+    .tr-reset {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 0;
+      text-decoration: underline;
+    }
+    .tr-reset:hover { color: var(--text); }
+
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
     .merge-item {
@@ -316,7 +393,8 @@
     <button class="tab-btn"        data-tab="trim"     onclick="switchTab(this,'trim')">✂️ Trim</button>
     <button class="tab-btn"        data-tab="merge"    onclick="switchTab(this,'merge')">🔗 Merge</button>
     <button class="tab-btn"        data-tab="convert"  onclick="switchTab(this,'convert')">🔄 Convert</button>
-    <button class="tab-btn"        data-tab="ytdl"     onclick="switchTab(this,'ytdl')">▶️ YouTube</button>
+    <button class="tab-btn"        data-tab="transcribe" onclick="switchTab(this,'transcribe')">🎤 Transcribe</button>
+    <button class="tab-btn"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')">▶️ YouTube</button>
   </div>
 
   <!-- ══ SPEED UP ══ -->
@@ -486,6 +564,63 @@
   </div>
 
 
+  <!-- ══ TRANSCRIBE ══ -->
+  <div id="panel-transcribe" class="panel">
+    <div class="card">
+      <h2>Transcribe to SRT</h2>
+      <p class="desc">Generate a subtitle file from any video or audio. Uses Whisper large-v3-turbo on your M-series chip via Metal GPU — runs locally, no data leaves your machine.</p>
+
+      <div class="dropzone" id="dz-transcribe" onclick="document.getElementById('f-transcribe').click()">
+        <div class="dz-icon">🎙️</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-transcribe"></div>
+        <input type="file" id="f-transcribe" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'transcribe')">
+      </div>
+
+      <div class="field">
+        <label>Language</label>
+        <select id="tr-lang" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+          <option value="">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+          <option value="ar">Arabic</option>
+          <option value="ru">Russian</option>
+          <option value="ko">Korean</option>
+          <option value="it">Italian</option>
+          <option value="nl">Dutch</option>
+          <option value="tr">Turkish</option>
+        </select>
+        <div class="hint">Specifying the language improves accuracy. Auto-detect works well for most content.</div>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:18px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="tr-romanize" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer;">
+        <span style="font-size:14px;">Romanize Hindi/Urdu text <span style="color:var(--muted);font-size:12px;">(Devanagari → Roman script, good for Hinglish)</span></span>
+      </label>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        ⚡ Runs on your M-series chip via Metal GPU &nbsp;·&nbsp; ~real-time speed<br>
+        📦 First run downloads the model (~1.6 GB, cached after that)
+      </div>
+
+      <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
+      <div class="progress-wrap" id="pw-transcribe">
+        <div class="progress-meta"><span id="pl-transcribe">Uploading…</span><span id="pp-transcribe">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-transcribe"></div></div>
+      </div>
+      <div class="result-box" id="rb-transcribe"></div>
+      <div class="error-box"  id="eb-transcribe"></div>
+    </div>
+  </div>
+
   <!-- ══ YOUTUBE DOWNLOADER ══ -->
   <div id="panel-ytdl" class="panel">
     <div class="card">
@@ -602,6 +737,9 @@
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let mergeFiles = [];
+let _trSegs = [];          // current transcript segments (may be edited)
+let _trSegsOrig = [];      // originals for reset
+let _trFilename = 'transcript.srt';
 let dragSrcIdx = null;
 
 // ── Tab switching ──────────────────────────────────────────────────────────
@@ -972,6 +1110,229 @@ function submitYT() {
   };
 
   xhr.send(form);
+}
+
+// ── Transcribe ─────────────────────────────────────────────────────────────
+function submitTranscribe() {
+  const file = document.getElementById('f-transcribe').files[0];
+  if (!file) return alert('Please select a video or audio file first.');
+  const lang     = document.getElementById('tr-lang').value;
+  const romanize = document.getElementById('tr-romanize').checked;
+
+  resetUI('transcribe');
+
+  const form = new FormData();
+  form.append('file', file);
+  if (lang) form.append('language', lang);
+  if (romanize) form.append('romanize', '1');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/transcribe');
+  xhr.responseType = 'json';
+
+  showProgress('transcribe', 0, 'Uploading…');
+
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 30);
+    showProgress('transcribe', pct, 'Uploading…');
+  };
+
+  xhr.upload.onload = () => {
+    document.getElementById('pl-transcribe').textContent = 'Starting transcription…';
+    showProgress('transcribe', 35, 'Starting transcription…');
+  };
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      const msg = (xhr.response && xhr.response.error) || 'Upload failed.';
+      showError('transcribe', msg);
+      return;
+    }
+    const taskId = xhr.response.task_id;
+    pollTranscribe(taskId, Date.now());
+  };
+
+  xhr.onerror = () => showError('transcribe', 'Network error — is the server running?');
+
+  xhr.send(form);
+}
+
+function pollTranscribe(taskId, startTime) {
+  const pf = document.getElementById('pf-transcribe');
+  const pp = document.getElementById('pp-transcribe');
+  const pl = document.getElementById('pl-transcribe');
+
+  const interval = setInterval(async () => {
+    if (!document.getElementById('pw-transcribe').classList.contains('visible')) {
+      clearInterval(interval);
+      return;
+    }
+
+    let data;
+    try {
+      const res = await fetch('/transcribe/status/' + taskId);
+      data = await res.json();
+    } catch {
+      clearInterval(interval);
+      showError('transcribe', 'Lost connection to server.');
+      return;
+    }
+
+    if (!data || data.status === 'processing') {
+      const elapsed = Math.min(Date.now() - startTime, 300000);
+      const pct = Math.round(35 + elapsed / 300000 * 55);
+      const label = data && data.progress ? data.progress : 'Transcribing…';
+      pl.textContent = label;
+      pp.textContent = pct + '%';
+      pf.style.width = pct + '%';
+      return;
+    }
+
+    clearInterval(interval);
+
+    if (data.status === 'done') {
+      document.getElementById('pw-transcribe').classList.remove('visible');
+
+      _trSegs     = (data.segments || []).map(s => ({...s}));
+      _trSegsOrig = (data.segments || []).map(s => ({...s}));
+      _trFilename = data.filename || 'transcript.srt';
+
+      renderTranscriptResult(data.segments ? data.segments.length : 0);
+    } else {
+      showError('transcribe', data.error || 'Transcription failed.');
+    }
+  }, 2000);
+}
+
+function fmtTranscriptTime(s) {
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const ss  = sec.toFixed(3).padStart(6, '0');
+  return h > 0
+    ? `${h}:${String(m).padStart(2,'0')}:${ss}`
+    : `${m}:${ss}`;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function renderTranscriptResult(count) {
+  const rb       = document.getElementById('rb-transcribe');
+  const fileInput = document.getElementById('f-transcribe');
+  const file     = fileInput.files[0];
+
+  // Player
+  let playerHtml = '';
+  if (file) {
+    const tag = file.type.startsWith('video/') ? 'video' : 'audio';
+    playerHtml = `<div class="tr-player-wrap"><${tag} id="tr-player" controls></${tag}></div>`;
+  }
+
+  // Segments
+  let previewHtml = '';
+  if (_trSegs.length > 0) {
+    const rows = _trSegs.map((s, i) =>
+      `<div class="tr-seg" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
+      `<span class="tr-ts" onclick="trSeek(${s.start})" title="Click to jump here">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
+      `<span class="tr-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</span>` +
+      `</div>`
+    ).join('');
+    previewHtml =
+      `<div class="tr-preview" id="tr-preview">${rows}</div>` +
+      `<div class="tr-toolbar">` +
+      `<span class="tr-hint">✏️ Click any line to edit · Click timestamp to seek</span>` +
+      `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
+      `</div>`;
+  }
+
+  rb.innerHTML = `
+    <div class="result-title">✓ Transcription complete! (${count} segments)</div>
+    ${playerHtml}
+    <button class="download-btn" onclick="downloadTranscript()" style="margin-bottom:14px">⬇ Download .srt file</button>
+    ${previewHtml}`;
+  rb.classList.add('visible');
+
+  // Wire up player
+  if (file) {
+    const player  = document.getElementById('tr-player');
+    const blobUrl = URL.createObjectURL(file);
+    player.src = blobUrl;
+    player.addEventListener('timeupdate', () => updateTrHighlight(player.currentTime));
+  }
+
+  // Sync edits back to _trSegs on input
+  rb.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
+    el.addEventListener('input', () => {
+      _trSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
+    });
+  });
+}
+
+function trSeek(time) {
+  const player = document.getElementById('tr-player');
+  if (!player) return;
+  player.currentTime = time;
+  player.play();
+}
+
+function updateTrHighlight(currentTime) {
+  const preview = document.getElementById('tr-preview');
+  if (!preview) return;
+  let activeEl = null;
+  preview.querySelectorAll('.tr-seg').forEach(el => {
+    const start = parseFloat(el.dataset.start);
+    const end   = parseFloat(el.dataset.end);
+    const active = currentTime >= start && currentTime < end;
+    el.classList.toggle('tr-active', active);
+    if (active) activeEl = el;
+  });
+  if (activeEl) {
+    const pr = preview.getBoundingClientRect();
+    const er = activeEl.getBoundingClientRect();
+    const isVisible = er.top >= pr.top + 8 && er.bottom <= pr.bottom - 8;
+    if (!isVisible) {
+      preview.scrollTop += er.top - pr.top - preview.clientHeight / 3;
+    }
+  }
+}
+
+function resetTranscript() {
+  _trSegs = _trSegsOrig.map(s => ({...s}));
+  // Re-render preview only (keep result box visible)
+  const preview = document.getElementById('tr-preview');
+  if (!preview) return;
+  preview.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
+    const idx = parseInt(el.dataset.idx, 10);
+    el.innerText = _trSegsOrig[idx].text;
+    _trSegs[idx].text = _trSegsOrig[idx].text;
+  });
+}
+
+function downloadTranscript() {
+  const srt = _trSegs.map((s, i) =>
+    `${i + 1}\n${srtTimestamp(s.start)} --> ${srtTimestamp(s.end)}\n${s.text.trim()}\n`
+  ).join('\n');
+  const blob = new Blob([srt], {type: 'text/plain'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = _trFilename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function srtTimestamp(s) {
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const ms  = Math.round((s % 1) * 1000);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
 }
 </script>
 </body>
