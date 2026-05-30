@@ -891,12 +891,28 @@ function submit(tab) {
 }
 
 // ── YouTube Download ───────────────────────────────────────────────────────
+function isPlaylistUrl(url) {
+  try {
+    const u = new URL(url);
+    // Pure playlist page (no individual video selected)
+    return u.searchParams.has('list') && !u.searchParams.has('v');
+  } catch { return false; }
+}
+
 function submitYT() {
   const url     = document.getElementById('ytdl-url').value.trim();
   const quality = document.querySelector('input[name="ytdl-q"]:checked').value;
   if (!url) return alert('Please paste a YouTube URL first.');
 
   resetUI('ytdl');
+
+  if (isPlaylistUrl(url)) {
+    document.getElementById('eb-ytdl').textContent =
+      '✕ Playlist URLs are not supported — please paste a single video URL. ' +
+      'Tip: open the video from the playlist and copy that URL instead.';
+    document.getElementById('eb-ytdl').classList.add('visible');
+    return;
+  }
   document.getElementById('pw-ytdl').classList.add('visible');
   document.getElementById('pl-ytdl').textContent = 'Downloading…';
 
