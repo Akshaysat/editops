@@ -51,7 +51,13 @@ echo "📦  Installing Python dependencies (this may take a few minutes on first
 pip install -r requirements.txt -q
 echo "✅  Dependencies installed"
 
-# ── 6. Make launcher executable ──────────────────────────────────────────────
+# ── 6. Pre-download Whisper model ────────────────────────────────────────────
+echo "📦  Pre-downloading Whisper transcription model (~1.6 GB)..."
+echo "    This only happens once. May take a few minutes on slow connections..."
+python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')"
+echo "✅  Whisper model ready"
+
+# ── 7. Make launcher executable ──────────────────────────────────────────────
 chmod +x start_mac.command start_mac.sh 2>/dev/null
 
 echo ""
