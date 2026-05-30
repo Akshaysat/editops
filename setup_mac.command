@@ -57,15 +57,20 @@ echo "    This only happens once. May take a few minutes on slow connections..."
 python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')"
 echo "✅  Whisper model ready"
 
-# ── 7. Make launcher executable ──────────────────────────────────────────────
-chmod +x start_mac.command start_mac.sh 2>/dev/null
+# ── 7. Generate app icon ─────────────────────────────────────────────────────
+echo "🎨  Generating app icon..."
+python3 make_icon.py
+
+# ── 8. Make launcher executable & remove quarantine ──────────────────────────
+chmod +x start_mac.command start_mac.sh EditOps.app/Contents/MacOS/EditOps 2>/dev/null
+xattr -cr EditOps.app 2>/dev/null
 
 echo ""
 echo "────────────────────────────────"
 echo "✅  Setup complete!"
 echo ""
 echo "To launch EditOps:"
-echo "  → Double-click  start_mac.command"
+echo "  → Double-click  EditOps.app"
 echo "  → Or run:        ./start_mac.sh"
 echo ""
 echo "The app will auto-update from GitHub every time it starts."
