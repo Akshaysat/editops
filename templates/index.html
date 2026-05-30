@@ -837,20 +837,23 @@ function submit(tab) {
   xhr.open('POST', endpoint);
   xhr.responseType = 'blob';
 
-  // Upload progress
+  // Show progress immediately so there's no blank gap before onprogress fires
+  showProgress(tab, 0, 'Uploading…');
+
+  // Upload progress: map 0–100% upload → 0–50% on the bar
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
-    const pct = Math.round(e.loaded / e.total * 100);
-    showProgress(tab, pct, pct < 100 ? 'Uploading…' : 'Processing…');
+    const pct = Math.round(e.loaded / e.total * 50);
+    showProgress(tab, pct, 'Uploading…');
+  };
 
-    // After upload completes, animate a slow crawl to show server work
-    if (pct === 100) {
-      const pf = document.getElementById('pf-' + tab);
-      setTimeout(() => {
-        pf.style.transition = 'width 30s linear';
-        pf.style.width = '92%';
-      }, 100);
-    }
+  // Upload finished — switch to processing state
+  xhr.upload.onload = () => {
+    document.getElementById('pl-' + tab).textContent = 'Processing…';
+    document.getElementById('pp-' + tab).textContent = '';
+    const pf = document.getElementById('pf-' + tab);
+    pf.style.transition = 'width 90s linear';
+    pf.style.width = '88%';
   };
 
   xhr.onload = () => {
