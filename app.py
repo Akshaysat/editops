@@ -445,12 +445,12 @@ def ytdl_route():
 
     if quality == 'audio':
         cmd = ['yt-dlp', '-x', '--audio-format', 'mp3', '--audio-quality', '0',
-               '--print', '%(title)s', '-o', out_tmpl, url]
+               '--print', '%(title)s', '--no-simulate', '-o', out_tmpl, url]
     else:
         cmd = ['yt-dlp',
                '-f', f'bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
                '--merge-output-format', 'mp4',
-               '--print', '%(title)s', '-o', out_tmpl, url]
+               '--print', '%(title)s', '--no-simulate', '-o', out_tmpl, url]
 
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
