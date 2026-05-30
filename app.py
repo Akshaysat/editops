@@ -379,12 +379,14 @@ def convert_route():
 
     target_fmt = request.form.get('format', 'mp4').lower().strip('.')
     SUPPORTED = {
-        'mp4':  {'vcodec': 'libx264', 'acodec': 'aac',          'ext': '.mp4'},
-        'mov':  {'vcodec': 'libx264', 'acodec': 'aac',          'ext': '.mov'},
-        'avi':  {'vcodec': 'libxvid', 'acodec': 'mp3',          'ext': '.avi'},
-        'mkv':  {'vcodec': 'libx264', 'acodec': 'aac',          'ext': '.mkv'},
-        'webm': {'vcodec': 'libvpx-vp9', 'acodec': 'libopus',  'ext': '.webm'},
-        'gif':  {'vcodec': None,      'acodec': None,            'ext': '.gif'},
+        'mp4':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mp4'},
+        'mov':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mov'},
+        'avi':  {'vcodec': 'libxvid',    'acodec': 'mp3',      'ext': '.avi'},
+        'mkv':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mkv'},
+        'webm': {'vcodec': 'libvpx-vp9', 'acodec': 'libopus', 'ext': '.webm'},
+        'gif':  {'vcodec': None,         'acodec': None,       'ext': '.gif'},
+        'mp3':  {'acodec': 'libmp3lame', 'abr': '192k',        'ext': '.mp3', 'audio_only': True},
+        'wav':  {'acodec': 'pcm_s16le',  'abr': None,          'ext': '.wav', 'audio_only': True},
     }
 
     if target_fmt not in SUPPORTED:
@@ -394,7 +396,13 @@ def convert_route():
     cfg = SUPPORTED[target_fmt]
     output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{cfg["ext"]}')
 
-    if target_fmt == 'gif':
+    if cfg.get('audio_only'):
+        cmd = ['ffmpeg', '-y', '-i', input_path, '-vn', '-c:a', cfg['acodec']]
+        if cfg.get('abr'):
+            cmd += ['-b:a', cfg['abr']]
+        cmd.append(output_path)
+        r = subprocess.run(cmd, capture_output=True)
+    elif target_fmt == 'gif':
         # High-quality GIF via palette
         palette = os.path.join(TEMP_DIR, f'vt_palette_{uid}.png')
         subprocess.run(

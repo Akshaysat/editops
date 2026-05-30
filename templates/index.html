@@ -536,16 +536,16 @@
   <!-- ══ CONVERT ══ -->
   <div id="panel-convert" class="panel">
     <div class="card">
-      <h2>Convert Video Format</h2>
-      <p class="desc">Convert your video to a different format. Supports MP4, MOV, AVI, MKV, WebM, and GIF.</p>
+      <h2>Convert Format</h2>
+      <p class="desc">Convert your video or audio file to a different format. Supports MP4, MOV, AVI, MKV, WebM, GIF, MP3, and WAV.</p>
 
       <div class="dropzone" id="dz-convert" onclick="document.getElementById('f-convert').click()">
         <div class="dz-icon">🎥</div>
         <div class="dz-default">
-          <div class="dz-label">Drop your video here or <b>browse</b></div>
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
         </div>
         <div class="dz-file-info" id="fi-convert"></div>
-        <input type="file" id="f-convert" accept="video/*" style="display:none" onchange="onFile(this,'convert')">
+        <input type="file" id="f-convert" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'convert')">
       </div>
 
       <div class="field">
@@ -575,11 +575,19 @@
             <input type="radio" name="cvt-fmt" id="cvt-gif"  value="gif">
             <label for="cvt-gif">GIF</label>
           </div>
+          <div class="radio-opt">
+            <input type="radio" name="cvt-fmt" id="cvt-mp3"  value="mp3">
+            <label for="cvt-mp3">MP3</label>
+          </div>
+          <div class="radio-opt">
+            <input type="radio" name="cvt-fmt" id="cvt-wav"  value="wav">
+            <label for="cvt-wav">WAV</label>
+          </div>
         </div>
-        <div class="hint">GIF is exported at 15fps · 640px wide for optimal size</div>
+        <div class="hint">GIF: 15fps · 640px wide &nbsp;·&nbsp; MP3: 192kbps &nbsp;·&nbsp; WAV: lossless PCM</div>
       </div>
 
-      <button class="submit-btn" onclick="submit('convert')">Convert Video</button>
+      <button class="submit-btn" onclick="submit('convert')">Convert File</button>
       <div class="progress-wrap" id="pw-convert">
         <div class="progress-meta"><span id="pl-convert">Uploading…</span><span id="pp-convert">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-convert"></div></div>
