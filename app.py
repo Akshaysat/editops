@@ -277,7 +277,7 @@ def trim_route():
 def merge_route():
     files = request.files.getlist('videos')
     if len(files) < 2:
-        return jsonify(error='Please upload at least 2 videos.'), 400
+        return jsonify(error='Please upload at least 2 files.'), 400
 
     uid = str(uuid.uuid4())
     input_paths = []
@@ -287,16 +287,37 @@ def merge_route():
         f.save(path)
         input_paths.append(path)
 
+    # Detect if any file has a video stream
+    def has_video_stream(path):
+        r = subprocess.run(
+            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', path],
+            capture_output=True, text=True)
+        if r.returncode != 0:
+            return False
+        streams = json.loads(r.stdout).get('streams', [])
+        return any(s.get('codec_type') == 'video' for s in streams)
+
+    is_video_merge = any(has_video_stream(p) for p in input_paths)
+
     concat_path = os.path.join(TEMP_DIR, f'vt_concat_{uid}.txt')
     with open(concat_path, 'w') as fh:
         for p in input_paths:
             fh.write(f"file '{p}'\n")
 
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-    cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-           '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-           '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
-           output_path]
+    if is_video_merge:
+        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+        cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+               '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+               '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
+               output_path]
+        download_name = 'merged_video.mp4'
+    else:
+        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+        cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+               '-c:a', 'libmp3lame', '-b:a', '192k',
+               output_path]
+        download_name = 'merged_audio.mp3'
+
     r = subprocess.run(cmd, capture_output=True)
 
     cleanup_later(concat_path)
@@ -307,8 +328,7 @@ def merge_route():
         return jsonify(error='Merge failed.'), 500
 
     cleanup_later(output_path)
-    return send_file(output_path, as_attachment=True,
-                     download_name='merged_video.mp4')
+    return send_file(output_path, as_attachment=True, download_name=download_name)
 
 
 @app.route('/convert', methods=['POST'])

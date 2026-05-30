@@ -464,12 +464,12 @@
   <div id="panel-merge" class="panel">
     <div class="card">
       <h2>Merge Videos</h2>
-      <p class="desc">Combine multiple videos into one file. Videos are merged in the order they appear below.</p>
+      <p class="desc">Combine multiple videos or audio files into one. Files are merged in the order they appear below. Mix of all audio → outputs MP3. Any video → outputs MP4.</p>
 
       <div class="dropzone" id="dz-merge" onclick="document.getElementById('f-merge').click()">
         <div class="dz-icon">🎬</div>
-        <div class="dz-label">Drop multiple videos here or <b>browse</b></div>
-        <input type="file" id="f-merge" accept="video/*" multiple style="display:none" onchange="onMergeFiles(this)">
+        <div class="dz-label">Drop multiple videos or audio files here or <b>browse</b></div>
+        <input type="file" id="f-merge" accept="video/*,audio/*" multiple style="display:none" onchange="onMergeFiles(this)">
       </div>
 
       <div class="merge-list" id="merge-list"></div>
