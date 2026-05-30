@@ -1,3 +1,0 @@
-#!/bin/bash
-PROJECT_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
-open "$PROJECT_DIR/start_mac.command"

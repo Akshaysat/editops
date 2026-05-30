@@ -57,20 +57,40 @@ echo "    This only happens once. May take a few minutes on slow connections..."
 python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')"
 echo "✅  Whisper model ready"
 
-# ── 7. Generate app icon ─────────────────────────────────────────────────────
-echo "🎨  Generating app icon..."
-python3 make_icon.py
+# ── 7. Create branded launcher app ───────────────────────────────────────────
+echo "📱  Creating EditOps.app launcher..."
+rm -rf EditOps.app
 
-# ── 8. Make launcher executable & remove quarantine ──────────────────────────
-chmod +x start_mac.command start_mac.sh EditOps.app/Contents/MacOS/EditOps 2>/dev/null
+# Compile a proper macOS app via osacompile (universal binary — Intel + Apple Silicon)
+TMP_SCRIPT=$(mktemp /tmp/editops_XXXXXX.applescript)
+cat > "$TMP_SCRIPT" << 'APPLESCRIPT'
+on run
+    set appPath to POSIX path of (path to me)
+    set projectDir to do shell script "dirname " & quoted form of (appPath)
+    do shell script "open " & quoted form of (projectDir & "/start_mac.command")
+end run
+APPLESCRIPT
+osacompile -o EditOps.app "$TMP_SCRIPT"
+rm -f "$TMP_SCRIPT"
+
+# Apply branded icon (replaces osacompile's default applet icon)
+echo "🎨  Applying app icon..."
+python3 make_icon.py
+cp EditOps.app/Contents/Resources/AppIcon.icns \
+   EditOps.app/Contents/Resources/applet.icns 2>/dev/null || true
+
+# Remove quarantine so macOS doesn't block the app
 xattr -cr EditOps.app 2>/dev/null
+
+# ── 8. Make shell launchers executable ───────────────────────────────────────
+chmod +x start_mac.command start_mac.sh 2>/dev/null
 
 echo ""
 echo "────────────────────────────────"
 echo "✅  Setup complete!"
 echo ""
 echo "To launch EditOps:"
-echo "  → Double-click  EditOps.app"
+echo "  → Double-click  EditOps.app  (drag to Dock for quick access)"
 echo "  → Or run:        ./start_mac.sh"
 echo ""
 echo "The app will auto-update from GitHub every time it starts."
