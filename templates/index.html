@@ -8,19 +8,15 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --sidebar-w:  224px;
-      --bg:         #F6F6F6;
-      --surface:    #FFFFFF;
-      --border:     #E8E8E8;
-      --border-2:   #D0D0D0;
-      --text:       #111111;
-      --muted:      #888888;
-      --success:    #1A8C3F;
-      --error:      #C92A2A;
-      --radius:     10px;
-      --sb-bg:      #0E0E0E;
-      --sb-text:    rgba(255,255,255,0.6);
-      --sb-active:  #FFFFFF;
+      --sidebar-w: 248px;
+      --bg:        #F8F9FA;
+      --surface:   #FFFFFF;
+      --border:    #EBEBEB;
+      --text:      #111111;
+      --muted:     #888888;
+      --success:   #1A8C3F;
+      --error:     #C92A2A;
+      --radius:    10px;
     }
 
     html, body { height: 100%; }
@@ -35,52 +31,53 @@
     .sidebar {
       width: var(--sidebar-w);
       min-height: 100vh;
-      background: var(--sb-bg);
+      background: #FFFFFF;
       display: flex;
       flex-direction: column;
       position: fixed;
       left: 0; top: 0;
       z-index: 100;
-      border-right: 1px solid #1C1C1C;
+      border-right: 1px solid var(--border);
     }
     .sidebar-brand {
-      padding: 22px 18px 18px;
-      border-bottom: 1px solid rgba(255,255,255,0.07);
+      padding: 18px 16px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    .sidebar-brand .logo {
-      font-size: 15px;
+    .sidebar-brand .sb-icon {
+      width: 30px; height: 30px;
+      background: #111111;
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #fff; flex-shrink: 0;
+    }
+    .sidebar-brand .sb-name {
+      font-size: 14px;
       font-weight: 700;
-      color: #FFFFFF;
-      display: block;
+      color: #111111;
       letter-spacing: -0.2px;
     }
-    .sidebar-brand .brand {
-      font-size: 10.5px;
-      color: rgba(255,255,255,0.28);
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      display: block;
-      margin-top: 4px;
-    }
-    .sidebar-nav { padding: 10px 10px; flex: 1; overflow-y: auto; }
+    .sidebar-nav { padding: 8px 10px; flex: 1; overflow-y: auto; }
     .nav-section {
-      font-size: 10px;
+      font-size: 10.5px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: rgba(255,255,255,0.2);
-      padding: 12px 10px 5px;
+      letter-spacing: 0.7px;
+      color: #BBBBBB;
+      padding: 14px 8px 5px;
     }
     .nav-item {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
       width: 100%;
       padding: 8px 10px;
       border: none;
       background: transparent;
-      color: var(--sb-text);
-      font-size: 13px;
+      color: #555555;
+      font-size: 13.5px;
       font-weight: 500;
       border-radius: 7px;
       cursor: pointer;
@@ -88,35 +85,31 @@
       text-align: left;
       margin-bottom: 1px;
     }
-    .nav-item:hover:not(.active) {
-      background: rgba(255,255,255,0.07);
-      color: rgba(255,255,255,0.85);
+    .nav-item:hover:not(.active) { background: #F5F5F5; color: #111111; }
+    .nav-item.active { background: #111111; color: #FFFFFF; font-weight: 600; }
+    .nav-item .ni { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; opacity: 0.7; }
+    .nav-item.active .ni { opacity: 1; }
+    .sidebar-user {
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
     }
-    .nav-item.active {
-      background: #FFFFFF;
-      color: #0E0E0E;
-      font-weight: 600;
-    }
-    .nav-item .ni { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
-    .sidebar-footer {
-      padding: 14px 18px;
-      border-top: 1px solid rgba(255,255,255,0.07);
-      font-size: 11px;
-      color: rgba(255,255,255,0.18);
-    }
+    .sidebar-user .su-name { font-size: 13px; font-weight: 600; color: #111; }
+    .sidebar-user .su-role { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 
     /* ── Main ── */
-    .main {
-      margin-left: var(--sidebar-w);
-      min-height: 100vh;
-      flex: 1;
-      background: var(--bg);
+    .main { margin-left: var(--sidebar-w); min-height: 100vh; flex: 1; background: var(--bg); }
+    .content { max-width: 700px; margin: 0 auto; padding: 36px 28px 80px; }
+
+    /* ── Page header (title above card) ── */
+    .page-header { margin-bottom: 22px; }
+    .page-header h1 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.4px;
+      margin-bottom: 4px;
     }
-    .content {
-      max-width: 660px;
-      margin: 0 auto;
-      padding: 36px 24px 80px;
-    }
+    .page-header p { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
 
     /* ── Panel ── */
     .panel { display: none; }
@@ -127,22 +120,11 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 28px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.04), 0 0 0 0 transparent;
+      padding: 24px 26px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    .card h2 {
-      font-size: 17px;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 5px;
-      letter-spacing: -0.2px;
-    }
-    .card .desc {
-      font-size: 13px;
-      color: var(--muted);
-      margin-bottom: 24px;
-      line-height: 1.55;
-    }
+    .card h2 { display: none; }
+    .card .desc { display: none; }
 
     /* ── Drop Zone ── */
     .dropzone {
@@ -446,22 +428,25 @@
 
 <aside class="sidebar">
   <div class="sidebar-brand">
-    <span class="logo">✦ EditOps</span>
-    <span class="brand">Money Mediia</span>
+    <div class="sb-icon">✦</div>
+    <span class="sb-name">EditOps</span>
   </div>
   <nav class="sidebar-nav">
     <div class="nav-section">Edit</div>
-    <button class="nav-item active" data-tab="speed"     onclick="switchTab(this,'speed')"><span class="ni">⚡</span> Speed Up</button>
-    <button class="nav-item"        data-tab="compress"  onclick="switchTab(this,'compress')"><span class="ni">◈</span> Compress</button>
-    <button class="nav-item"        data-tab="trim"      onclick="switchTab(this,'trim')"><span class="ni">✂</span> Trim</button>
-    <button class="nav-item"        data-tab="merge"     onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
-    <button class="nav-item"        data-tab="convert"   onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
+    <button class="nav-item active" data-tab="speed"      onclick="switchTab(this,'speed')"><span class="ni">⚡</span> Speed Up</button>
+    <button class="nav-item"        data-tab="compress"   onclick="switchTab(this,'compress')"><span class="ni">◈</span> Compress</button>
+    <button class="nav-item"        data-tab="trim"       onclick="switchTab(this,'trim')"><span class="ni">✂</span> Trim</button>
+    <button class="nav-item"        data-tab="merge"      onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
+    <button class="nav-item"        data-tab="convert"    onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <div class="nav-section">Download</div>
-    <button class="nav-item"        data-tab="ytdl"      onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
+    <button class="nav-item"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
   </nav>
-  <div class="sidebar-footer">EditOps v1.0</div>
+  <div class="sidebar-user">
+    <div class="su-name">Money Mediia</div>
+    <div class="su-role">EditOps v1.0</div>
+  </div>
 </aside>
 
 <main class="main">
@@ -469,6 +454,7 @@
 
   <!-- ══ SPEED UP ══ -->
   <div id="panel-speed" class="panel active">
+    <div class="page-header"><h1>Speed Up</h1><p>Increase or decrease playback speed while preserving audio pitch. Works with video and audio files.</p></div>
     <div class="card">
       <h2>Speed Up</h2>
       <p class="desc">Increase or decrease playback speed while preserving audio pitch. Works with video and audio files. Set a speed multiplier or a target duration.</p>
@@ -524,9 +510,10 @@
 
   <!-- ══ COMPRESS ══ -->
   <div id="panel-compress" class="panel">
+    <div class="page-header"><h1>Compress</h1><p>Shrink your file to a target size. Videos use two-pass encoding for accuracy. Audio files have their bitrate adjusted directly.</p></div>
     <div class="card">
       <h2>Compress</h2>
-      <p class="desc">Shrink your file to a target size. Videos use two-pass encoding for accuracy. Audio files have their bitrate adjusted directly. Works with video and audio files.</p>
+      <p class="desc">Shrink your file to a target size.</p>
 
       <div class="dropzone" id="dz-compress" onclick="document.getElementById('f-compress').click()">
         <div class="dz-icon">🎥</div>
@@ -561,9 +548,10 @@
 
   <!-- ══ TRIM ══ -->
   <div id="panel-trim" class="panel">
+    <div class="page-header"><h1>Trim</h1><p>Set a start and/or end time to extract a clip. Leave either field blank to keep from the beginning or to the end.</p></div>
     <div class="card">
       <h2>Trim</h2>
-      <p class="desc">Set a start and/or end time to extract the part you want. Works with video and audio files. Leave either field blank to keep from the very beginning or through to the very end.</p>
+      <p class="desc">Trim your file.</p>
 
       <div class="dropzone" id="dz-trim" onclick="document.getElementById('f-trim').click()">
         <div class="dz-icon">🎥</div>
@@ -611,9 +599,10 @@
 
   <!-- ══ MERGE ══ -->
   <div id="panel-merge" class="panel">
+    <div class="page-header"><h1>Merge</h1><p>Combine multiple videos or audio files into one, in the order you choose. All audio → MP3, any video → MP4.</p></div>
     <div class="card">
       <h2>Merge Videos & Audio</h2>
-      <p class="desc">Combine multiple videos or audio files into one. Files are merged in the order they appear below. Mix of all audio → outputs MP3. Any video → outputs MP4.</p>
+      <p class="desc">Merge files.</p>
 
       <div class="dropzone" id="dz-merge" onclick="document.getElementById('f-merge').click()">
         <div class="dz-icon">🎬</div>
@@ -636,9 +625,10 @@
 
   <!-- ══ TRANSCRIBE ══ -->
   <div id="panel-transcribe" class="panel">
+    <div class="page-header"><h1>Transcribe to SRT</h1><p>Generate a subtitle file from any video or audio. Runs locally on your M-series chip — no data leaves your machine.</p></div>
     <div class="card">
       <h2>Transcribe to SRT</h2>
-      <p class="desc">Generate a subtitle file from any video or audio. Uses Whisper large-v3-turbo on your M-series chip via Metal GPU — runs locally, no data leaves your machine.</p>
+      <p class="desc">Transcribe.</p>
 
       <div class="dropzone" id="dz-transcribe" onclick="document.getElementById('f-transcribe').click()">
         <div class="dz-icon">🎙️</div>
@@ -693,9 +683,10 @@
 
   <!-- ══ YOUTUBE DOWNLOADER ══ -->
   <div id="panel-ytdl" class="panel">
+    <div class="page-header"><h1>YouTube Downloader</h1><p>Download any YouTube video locally. Paste the URL, choose quality, and hit Download.</p></div>
     <div class="card">
       <h2>YouTube Downloader</h2>
-      <p class="desc">Download any YouTube video locally. Paste the URL, choose quality, and hit Download.</p>
+      <p class="desc">Download.</p>
 
       <div class="field">
         <label>YouTube URL</label>
@@ -740,9 +731,10 @@
 
   <!-- ══ CONVERT ══ -->
   <div id="panel-convert" class="panel">
+    <div class="page-header"><h1>Convert Format</h1><p>Convert your video or audio to a different format. Supports MP4, MOV, AVI, MKV, WebM, GIF, MP3, and WAV.</p></div>
     <div class="card">
       <h2>Convert Format</h2>
-      <p class="desc">Convert your video or audio file to a different format. Supports MP4, MOV, AVI, MKV, WebM, GIF, MP3, and WAV.</p>
+      <p class="desc">Convert.</p>
 
       <div class="dropzone" id="dz-convert" onclick="document.getElementById('f-convert').click()">
         <div class="dz-icon">🎥</div>
