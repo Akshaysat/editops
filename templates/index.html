@@ -322,16 +322,16 @@
   <!-- ══ SPEED UP ══ -->
   <div id="panel-speed" class="panel active">
     <div class="card">
-      <h2>Speed Up Video</h2>
-      <p class="desc">Increase playback speed while preserving audio pitch and original quality. Set either a target duration or a custom multiplier.</p>
+      <h2>Speed Up</h2>
+      <p class="desc">Increase or decrease playback speed while preserving audio pitch. Works with video and audio files. Set a speed multiplier or a target duration.</p>
 
       <div class="dropzone" id="dz-speed" onclick="document.getElementById('f-speed').click()">
         <div class="dz-icon">🎥</div>
         <div class="dz-default">
-          <div class="dz-label">Drop your video here or <b>browse</b></div>
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
         </div>
         <div class="dz-file-info" id="fi-speed"></div>
-        <input type="file" id="f-speed" accept="video/*" style="display:none" onchange="onFile(this,'speed')">
+        <input type="file" id="f-speed" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'speed')">
       </div>
 
       <div class="field">
@@ -364,7 +364,7 @@
         </div>
       </div>
 
-      <button class="submit-btn" onclick="submit('speed')">Process Video</button>
+      <button class="submit-btn" onclick="submit('speed')">Process File</button>
       <div class="progress-wrap" id="pw-speed">
         <div class="progress-meta"><span id="pl-speed">Uploading…</span><span id="pp-speed">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-speed"></div></div>
@@ -377,16 +377,16 @@
   <!-- ══ COMPRESS ══ -->
   <div id="panel-compress" class="panel">
     <div class="card">
-      <h2>Compress Video</h2>
-      <p class="desc">Shrink your video to a target file size using two-pass encoding for maximum quality at the chosen size.</p>
+      <h2>Compress</h2>
+      <p class="desc">Shrink your file to a target size. Videos use two-pass encoding for accuracy. Audio files have their bitrate adjusted directly. Works with video and audio files.</p>
 
       <div class="dropzone" id="dz-compress" onclick="document.getElementById('f-compress').click()">
         <div class="dz-icon">🎥</div>
         <div class="dz-default">
-          <div class="dz-label">Drop your video here or <b>browse</b></div>
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
         </div>
         <div class="dz-file-info" id="fi-compress"></div>
-        <input type="file" id="f-compress" accept="video/*" style="display:none" onchange="onFile(this,'compress')">
+        <input type="file" id="f-compress" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'compress')">
       </div>
 
       <div class="field">
@@ -401,7 +401,7 @@
         <div class="hint">Uses decimal MB (1 GB = 1000 MB)</div>
       </div>
 
-      <button class="submit-btn" onclick="submit('compress')">Compress Video</button>
+      <button class="submit-btn" onclick="submit('compress')">Compress File</button>
       <div class="progress-wrap" id="pw-compress">
         <div class="progress-meta"><span id="pl-compress">Uploading…</span><span id="pp-compress">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-compress"></div></div>
@@ -414,20 +414,21 @@
   <!-- ══ TRIM ══ -->
   <div id="panel-trim" class="panel">
     <div class="card">
-      <h2>Trim Video</h2>
-      <p class="desc">Set a start and/or end time to extract the part of the video you want. Leave either field blank to keep from the very beginning or through to the very end.</p>
+      <h2>Trim</h2>
+      <p class="desc">Set a start and/or end time to extract the part you want. Works with video and audio files. Leave either field blank to keep from the very beginning or through to the very end.</p>
 
       <div class="dropzone" id="dz-trim" onclick="document.getElementById('f-trim').click()">
         <div class="dz-icon">🎥</div>
         <div class="dz-default">
-          <div class="dz-label">Drop your video here or <b>browse</b></div>
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
         </div>
         <div class="dz-file-info" id="fi-trim"></div>
-        <input type="file" id="f-trim" accept="video/*" style="display:none" onchange="onFile(this,'trim')">
+        <input type="file" id="f-trim" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'trim')">
       </div>
 
       <div id="trim-preview" style="display:none;margin-bottom:22px;">
         <video id="trim-video" controls style="width:100%;border-radius:var(--radius);background:#000;max-height:280px;display:block;"></video>
+        <audio id="trim-audio" controls style="width:100%;display:none;margin-top:4px;"></audio>
         <div style="text-align:center;margin-top:8px;font-family:monospace;font-size:18px;font-weight:600;letter-spacing:1px;color:var(--accent);" id="trim-timecode">0:00.000</div>
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('start')">⬅ Set as Start Time</button>
@@ -450,7 +451,7 @@
       </div>
       <div class="hint" style="margin-top:-10px;margin-bottom:18px;">Format: mm:ss.mmm &nbsp;·&nbsp; h:mm:ss.mmm &nbsp;·&nbsp; or plain seconds (e.g. 3.5)</div>
 
-      <button class="submit-btn" onclick="submit('trim')">Trim Video</button>
+      <button class="submit-btn" onclick="submit('trim')">Trim File</button>
       <div class="progress-wrap" id="pw-trim">
         <div class="progress-meta"><span id="pl-trim">Uploading…</span><span id="pp-trim">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-trim"></div></div>
@@ -619,35 +620,41 @@ function onFile(input, tab) {
   document.getElementById('fi-' + tab).textContent = `✓  ${f.name}  (${fmtSize(f.size)})`;
 
   if (tab === 'trim') {
+    const isAudio = f.type.startsWith('audio/');
     const vid = document.getElementById('trim-video');
-    if (vid.src) URL.revokeObjectURL(vid.src);
-    vid.src = URL.createObjectURL(f);
+    const aud = document.getElementById('trim-audio');
+    const active   = isAudio ? aud : vid;
+    const inactive = isAudio ? vid : aud;
+    if (active.src)   URL.revokeObjectURL(active.src);
+    if (inactive.src) { URL.revokeObjectURL(inactive.src); inactive.src = ''; }
+    active.src = URL.createObjectURL(f);
+    active.style.display   = 'block';
+    inactive.style.display = 'none';
     document.getElementById('trim-preview').style.display = 'block';
     document.getElementById('trim-timecode').textContent = '0:00.000';
   }
 }
 
-document.getElementById('trim-video').addEventListener('timeupdate', () => {
-  const t = document.getElementById('trim-video').currentTime;
+function fmtTimecode(t) {
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
   const rawS = t % 60;
   const s = (rawS < 10 ? '0' : '') + rawS.toFixed(3);
-  document.getElementById('trim-timecode').textContent = h > 0
-    ? `${h}:${String(m).padStart(2,'0')}:${s}`
-    : `${m}:${s}`;
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${s}` : `${m}:${s}`;
+}
+document.getElementById('trim-video').addEventListener('timeupdate', () => {
+  document.getElementById('trim-timecode').textContent =
+    fmtTimecode(document.getElementById('trim-video').currentTime);
+});
+document.getElementById('trim-audio').addEventListener('timeupdate', () => {
+  document.getElementById('trim-timecode').textContent =
+    fmtTimecode(document.getElementById('trim-audio').currentTime);
 });
 
 function setTrimPoint(point) {
-  const t = document.getElementById('trim-video').currentTime;
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const rawS = t % 60;
-  const s = (rawS < 10 ? '0' : '') + rawS.toFixed(3);
-  const ts = h > 0
-    ? `${h}:${String(m).padStart(2,'0')}:${s}`
-    : `${m}:${s}`;
-  document.getElementById(point === 'start' ? 'trm-start' : 'trm-end').value = ts;
+  const vid = document.getElementById('trim-video');
+  const t = (vid.style.display !== 'none' ? vid : document.getElementById('trim-audio')).currentTime;
+  document.getElementById(point === 'start' ? 'trm-start' : 'trm-end').value = fmtTimecode(t);
 }
 
 function onMergeFiles(input) {

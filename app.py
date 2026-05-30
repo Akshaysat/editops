@@ -64,7 +64,7 @@ def cleanup_later(path, delay=90):
 
 
 def ffprobe_info(path):
-    """Return dict with duration, bit_rate, has_audio for a video file."""
+    """Return dict with duration, bit_rate, has_audio, has_video for a media file."""
     r = subprocess.run(
         ['ffprobe', '-v', 'quiet', '-print_format', 'json',
          '-show_format', '-show_streams', path],
@@ -76,10 +76,12 @@ def ffprobe_info(path):
     fmt = data.get('format', {})
     streams = data.get('streams', [])
     audio = next((s for s in streams if s.get('codec_type') == 'audio'), None)
+    video = next((s for s in streams if s.get('codec_type') == 'video'), None)
     return {
         'duration': float(fmt.get('duration') or 0),
         'bit_rate':  int(fmt.get('bit_rate')  or 0),
         'has_audio': audio is not None,
+        'has_video': video is not None,
     }
 
 
@@ -131,15 +133,14 @@ def index():
 def speed_route():
     file = request.files.get('video')
     if not file:
-        return jsonify(error='No video uploaded'), 400
+        return jsonify(error='No file uploaded'), 400
 
     input_path, uid = save_upload(file)
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
 
     info = ffprobe_info(input_path)
     if not info:
         os.remove(input_path)
-        return jsonify(error='Cannot read video file. Is it a valid video?'), 400
+        return jsonify(error='Cannot read file. Is it a valid video or audio?'), 400
 
     mode = request.form.get('mode', 'multiplier')
     raw  = request.form.get('value', '')
@@ -158,6 +159,22 @@ def speed_route():
         os.remove(input_path)
         return jsonify(error='Invalid speed / duration value.'), 400
 
+    if not info['has_video']:
+        # Audio-only: apply atempo chain, output mp3
+        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+        af = atempo_chain(speed)
+        cmd = ['ffmpeg', '-y', '-i', input_path,
+               '-filter:a', af, '-c:a', 'libmp3lame', '-b:a', '192k',
+               output_path]
+        r = subprocess.run(cmd, capture_output=True)
+        cleanup_later(input_path)
+        if r.returncode != 0:
+            return jsonify(error='ffmpeg failed. Make sure ffmpeg is installed.'), 500
+        cleanup_later(output_path)
+        return send_file(output_path, as_attachment=True,
+                         download_name=f'{stem(file.filename)}_sped_up.mp3')
+
+    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
     vf = f'setpts=PTS/{speed:.8f}'
     if info['has_audio']:
         af = atempo_chain(speed)
@@ -191,19 +208,35 @@ def speed_route():
 def compress_route():
     file = request.files.get('video')
     if not file:
-        return jsonify(error='No video uploaded'), 400
+        return jsonify(error='No file uploaded'), 400
 
     input_path, uid = save_upload(file)
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-    passlog     = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
 
     info = ffprobe_info(input_path)
     if not info or info['duration'] == 0:
         os.remove(input_path)
-        return jsonify(error='Cannot read video file.'), 400
+        return jsonify(error='Cannot read file.'), 400
 
     target_mb  = float(request.form.get('target_mb', 900))
-    total_bits = target_mb * 1_000_000 * 8          # decimal MB
+    total_bits = target_mb * 1_000_000 * 8
+
+    if not info['has_video']:
+        # Audio-only: set bitrate directly to hit target size
+        abr = max(32_000, int(total_bits / info['duration']))
+        abr_k = f"{abr // 1000}k"
+        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+        cmd = ['ffmpeg', '-y', '-i', input_path,
+               '-c:a', 'libmp3lame', '-b:a', abr_k, output_path]
+        r = subprocess.run(cmd, capture_output=True)
+        cleanup_later(input_path)
+        if r.returncode != 0:
+            return jsonify(error='Compression failed.'), 500
+        cleanup_later(output_path)
+        return send_file(output_path, as_attachment=True,
+                         download_name=f'{stem(file.filename)}_compressed.mp3')
+
+    passlog    = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
+    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
     audio_bits = 192_000 * info['duration']
     vbr        = int((total_bits - audio_bits) / info['duration'])
 
@@ -242,10 +275,9 @@ def compress_route():
 def trim_route():
     file = request.files.get('video')
     if not file:
-        return jsonify(error='No video uploaded'), 400
+        return jsonify(error='No file uploaded'), 400
 
     input_path, uid = save_upload(file)
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
 
     start = request.form.get('start', '').strip()
     end   = request.form.get('end', '').strip()
@@ -253,6 +285,14 @@ def trim_route():
     if not start and not end:
         os.remove(input_path)
         return jsonify(error='Please provide a start time, end time, or both.'), 400
+
+    info = ffprobe_info(input_path)
+    if info and not info['has_video']:
+        out_ext = os.path.splitext(file.filename)[1] or '.mp3'
+    else:
+        out_ext = '.mp4'
+
+    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{out_ext}')
 
     cmd = ['ffmpeg', '-y']
     if start:
@@ -270,7 +310,7 @@ def trim_route():
 
     cleanup_later(output_path)
     return send_file(output_path, as_attachment=True,
-                     download_name=f'{stem(file.filename)}_trimmed.mp4')
+                     download_name=f'{stem(file.filename)}_trimmed{out_ext}')
 
 
 @app.route('/merge', methods=['POST'])
