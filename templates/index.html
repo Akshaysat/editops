@@ -428,16 +428,16 @@
       <div style="display:flex;gap:14px;">
         <div class="field" style="flex:1">
           <label>Start Time <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
-          <input type="text" id="trm-start" placeholder="e.g. 0:30">
+          <input type="text" id="trm-start" placeholder="e.g. 0:30.500">
           <div class="hint">Leave blank to keep from the beginning</div>
         </div>
         <div class="field" style="flex:1">
           <label>End Time <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(optional)</span></label>
-          <input type="text" id="trm-end" placeholder="e.g. 4:15">
+          <input type="text" id="trm-end" placeholder="e.g. 4:15.000">
           <div class="hint">Leave blank to keep to the end</div>
         </div>
       </div>
-      <div class="hint" style="margin-top:-10px;margin-bottom:18px;">Format: mm:ss &nbsp;·&nbsp; h:mm:ss &nbsp;·&nbsp; or plain seconds</div>
+      <div class="hint" style="margin-top:-10px;margin-bottom:18px;">Format: mm:ss.mmm &nbsp;·&nbsp; h:mm:ss.mmm &nbsp;·&nbsp; or plain seconds (e.g. 3.5)</div>
 
       <button class="submit-btn" onclick="submit('trim')">Trim Video</button>
       <div class="progress-wrap" id="pw-trim">
@@ -618,10 +618,11 @@ function setTrimPoint(point) {
   const t = document.getElementById('trim-video').currentTime;
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
-  const s = Math.floor(t % 60);
+  const rawS = t % 60;
+  const s = (rawS < 10 ? '0' : '') + rawS.toFixed(3);
   const ts = h > 0
-    ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
-    : `${m}:${String(s).padStart(2,'0')}`;
+    ? `${h}:${String(m).padStart(2,'0')}:${s}`
+    : `${m}:${s}`;
   document.getElementById(point === 'start' ? 'trm-start' : 'trm-end').value = ts;
 }
 
