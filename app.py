@@ -505,6 +505,34 @@ def romanize_text(text):
         return text
 
 
+def check_spelling(segments):
+    """Return list of {seg_idx, word, suggestions, start} for misspelled English words."""
+    try:
+        from spellchecker import SpellChecker
+        import re
+        spell = SpellChecker()
+        issues = []
+        for i, seg in enumerate(segments):
+            # Only check Latin-script words — Devanagari/Hindi passes through untouched
+            words = re.findall(r"[A-Za-z']+", seg['text'])
+            to_check = [w.lower().strip("'") for w in words
+                        if len(w) > 2 and not w.isupper()]
+            for word in spell.unknown(to_check):
+                best = spell.correction(word)
+                others = sorted(spell.candidates(word) or set())
+                suggestions = ([best] if best and best != word else []) + \
+                              [c for c in others if c != word and c != best]
+                issues.append({
+                    'seg_idx':     i,
+                    'word':        word,
+                    'suggestions': suggestions[:3],
+                    'start':       seg['start'],
+                })
+        return issues
+    except Exception:
+        return []
+
+
 def segments_to_srt(segments):
     def fmt(t):
         h = int(t // 3600)
@@ -561,16 +589,20 @@ def transcribe_route():
                 for s in segs:
                     s['text'] = romanize_text(s['text'])
 
+            _tasks[uid]['progress'] = 'Checking spelling…'
+            spell_issues = check_spelling(segs)
+
             srt_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.srt')
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(segments_to_srt(segs))
 
             _tasks[uid] = {
-                'status':   'done',
-                'result':   srt_path,
-                'filename': f'{original_stem}.srt',
-                'language': result.get('language', ''),
-                'segments': segs,
+                'status':          'done',
+                'result':          srt_path,
+                'filename':        f'{original_stem}.srt',
+                'language':        result.get('language', ''),
+                'segments':        segs,
+                'spelling_issues': spell_issues,
             }
             cleanup_later(wav_path)
             cleanup_later(input_path)

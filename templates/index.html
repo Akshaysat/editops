@@ -412,6 +412,20 @@
       text-decoration: underline;
     }
     .tr-reset:hover { color: var(--text); }
+    .tr-seg-issue { border-left: 2px solid #E03131; }
+
+    /* ── Spell-check panel ── */
+    .sp-panel { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .sp-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; background: #FAFAFA; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+    .sp-badge    { background: #E03131; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
+    .sp-badge-ok { background: #1A8C3F; color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+    .sp-list { max-height: 180px; overflow-y: auto; }
+    .sp-item { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+    .sp-item:last-child { border-bottom: none; }
+    .sp-item:hover { background: #F8F9FA; }
+    .sp-ts   { font-family: monospace; color: var(--muted); font-size: 11px; min-width: 46px; flex-shrink: 0; }
+    .sp-word { font-weight: 600; color: #E03131; flex-shrink: 0; }
+    .sp-sugg { color: var(--muted); font-size: 12px; }
 
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
@@ -822,6 +836,7 @@
 let mergeFiles = [];
 let _trSegs = [];          // current transcript segments (may be edited)
 let _trSegsOrig = [];      // originals for reset
+let _trSpellIssues = [];   // spelling issues from last transcription
 let _trFilename = 'transcript.srt';
 let dragSrcIdx = null;
 
@@ -1277,9 +1292,10 @@ function pollTranscribe(taskId, startTime) {
     if (data.status === 'done') {
       document.getElementById('pw-transcribe').classList.remove('visible');
 
-      _trSegs     = (data.segments || []).map(s => ({...s}));
-      _trSegsOrig = (data.segments || []).map(s => ({...s}));
-      _trFilename = data.filename || 'transcript.srt';
+      _trSegs        = (data.segments || []).map(s => ({...s}));
+      _trSegsOrig    = (data.segments || []).map(s => ({...s}));
+      _trFilename    = data.filename || 'transcript.srt';
+      _trSpellIssues = data.spelling_issues || [];
 
       renderTranscriptResult(data.segments ? data.segments.length : 0);
     } else {
@@ -1320,8 +1336,9 @@ function renderTranscriptResult(count) {
   // Segments
   let previewHtml = '';
   if (_trSegs.length > 0) {
+    const issueSegs = new Set(_trSpellIssues.map(iss => iss.seg_idx));
     const rows = _trSegs.map((s, i) =>
-      `<div class="tr-seg" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
+      `<div class="tr-seg${issueSegs.has(i) ? ' tr-seg-issue' : ''}" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
       `<span class="tr-ts" onclick="trSeek(${s.start})" title="Click to jump here">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
       `<span class="tr-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</span>` +
       `</div>`
@@ -1331,7 +1348,8 @@ function renderTranscriptResult(count) {
       `<div class="tr-toolbar">` +
       `<span class="tr-hint">✏️ Click any line to edit · Click timestamp to seek</span>` +
       `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
-      `</div>`;
+      `</div>` +
+      renderSpellPanel();
   }
 
   rb.innerHTML = `
@@ -1408,6 +1426,38 @@ function downloadTranscript() {
   a.download = _trFilename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function renderSpellPanel() {
+  if (!_trSpellIssues.length) {
+    return `<div class="sp-panel"><div class="sp-header"><span>Spelling Check</span><span class="sp-badge-ok">✓ No issues</span></div></div>`;
+  }
+  const items = _trSpellIssues.map(iss =>
+    `<div class="sp-item" onclick="spJump(${iss.seg_idx},${iss.start})">` +
+    `<span class="sp-ts">${fmtTranscriptTime(iss.start)}</span>` +
+    `<span class="sp-word">${escHtml(iss.word)}</span>` +
+    (iss.suggestions.length
+      ? `<span class="sp-sugg">→ ${iss.suggestions.map(escHtml).join(', ')}</span>`
+      : '') +
+    `</div>`
+  ).join('');
+  return `<div class="sp-panel">` +
+    `<div class="sp-header"><span>Spelling Issues</span><span class="sp-badge">${_trSpellIssues.length}</span></div>` +
+    `<div class="sp-list">${items}</div>` +
+    `</div>`;
+}
+
+function spJump(segIdx, time) {
+  trSeek(time);
+  const preview = document.getElementById('tr-preview');
+  if (!preview) return;
+  const seg = preview.querySelector(`.tr-seg[data-idx="${segIdx}"]`);
+  if (!seg) return;
+  const pr = preview.getBoundingClientRect();
+  const er = seg.getBoundingClientRect();
+  if (er.top < pr.top + 8 || er.bottom > pr.bottom - 8)
+    preview.scrollTop += er.top - pr.top - preview.clientHeight / 3;
+  seg.querySelector('.tr-txt')?.focus();
 }
 
 function srtTimestamp(s) {
