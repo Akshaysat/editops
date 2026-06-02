@@ -43,12 +43,16 @@ def auto_update():
                        cwd=repo_dir, capture_output=True, timeout=30)
 
         # Re-install dependencies in case requirements.txt changed
+        # Only re-install if requirements.txt changed in this pull
+        req_changed = subprocess.run(
+            ['git', 'diff', 'HEAD~1', 'HEAD', '--name-only'],
+            cwd=repo_dir, capture_output=True, text=True).stdout
         pip = os.path.join(repo_dir, 'venv', 'bin', 'pip')
-        if os.path.exists(pip):
+        if 'requirements.txt' in req_changed and os.path.exists(pip):
             print('📦  Updating dependencies...')
             subprocess.run([pip, 'install', '-r',
                             os.path.join(repo_dir, 'requirements.txt'), '-q'],
-                           cwd=repo_dir, timeout=120)
+                           cwd=repo_dir, timeout=600)
 
         print('🔁  Restarting app with latest version...\n')
         time.sleep(1)
