@@ -427,6 +427,13 @@
     .sp-word { font-weight: 600; color: #E03131; flex-shrink: 0; }
     .sp-sugg { color: var(--muted); font-size: 12px; }
 
+    /* ── Full Script panel ── */
+    .tr-script { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .tr-script-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; background: #FAFAFA; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+    .tr-script-copy { background: var(--text); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
+    .tr-script-copy:hover { background: #333; }
+    .tr-script-body { padding: 12px 14px; font-size: 13px; line-height: 1.75; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); user-select: text; }
+
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
     .merge-item {
@@ -1349,7 +1356,11 @@ function renderTranscriptResult(count) {
       `<span class="tr-hint">✏️ Click any line to edit · Click timestamp to seek</span>` +
       `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
       `</div>` +
-      renderSpellPanel();
+      renderSpellPanel() +
+      `<div class="tr-script">` +
+      `<div class="tr-script-header"><span>Full Script</span><button class="tr-script-copy" onclick="copyScript(this)">Copy</button></div>` +
+      `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join('\n'))}</div>` +
+      `</div>`;
   }
 
   rb.innerHTML = `
@@ -1367,10 +1378,12 @@ function renderTranscriptResult(count) {
     player.addEventListener('timeupdate', () => updateTrHighlight(player.currentTime));
   }
 
-  // Sync edits back to _trSegs on input
+  // Sync edits back to _trSegs on input and refresh script body
   rb.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
     el.addEventListener('input', () => {
       _trSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
+      const sb = document.getElementById('tr-script-body');
+      if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join('\n');
     });
   });
 }
@@ -1413,6 +1426,8 @@ function resetTranscript() {
     el.innerText = _trSegsOrig[idx].text;
     _trSegs[idx].text = _trSegsOrig[idx].text;
   });
+  const sb = document.getElementById('tr-script-body');
+  if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join('\n');
 }
 
 function downloadTranscript() {
@@ -1426,6 +1441,15 @@ function downloadTranscript() {
   a.download = _trFilename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function copyScript(btn) {
+  const text = _trSegs.map(s => s.text.trim()).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
 }
 
 function renderSpellPanel() {
