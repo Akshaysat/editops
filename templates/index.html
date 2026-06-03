@@ -1359,7 +1359,7 @@ function renderTranscriptResult(count) {
       renderSpellPanel() +
       `<div class="tr-script">` +
       `<div class="tr-script-header"><span>Full Script</span><button class="tr-script-copy" onclick="copyScript(this)">Copy</button></div>` +
-      `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join('\n'))}</div>` +
+      `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join(' '))}</div>` +
       `</div>`;
   }
 
@@ -1383,7 +1383,7 @@ function renderTranscriptResult(count) {
     el.addEventListener('input', () => {
       _trSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
       const sb = document.getElementById('tr-script-body');
-      if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join('\n');
+      if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join(' ');
     });
   });
 }
@@ -1427,7 +1427,7 @@ function resetTranscript() {
     _trSegs[idx].text = _trSegsOrig[idx].text;
   });
   const sb = document.getElementById('tr-script-body');
-  if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join('\n');
+  if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join(' ');
 }
 
 function downloadTranscript() {
@@ -1444,7 +1444,7 @@ function downloadTranscript() {
 }
 
 function copyScript(btn) {
-  const text = _trSegs.map(s => s.text.trim()).join('\n');
+  const text = _trSegs.map(s => s.text.trim()).join(' ');
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
     btn.textContent = 'Copied!';
