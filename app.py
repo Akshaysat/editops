@@ -43,15 +43,17 @@ def auto_update():
                        cwd=repo_dir, capture_output=True, timeout=30)
 
         # Re-install dependencies in case requirements.txt changed
-        # Only re-install if requirements.txt changed in this pull
+        # Only re-install if a requirements file changed in this pull
         req_changed = subprocess.run(
             ['git', 'diff', 'HEAD~1', 'HEAD', '--name-only'],
             cwd=repo_dir, capture_output=True, text=True).stdout
-        pip = os.path.join(repo_dir, 'venv', 'bin', 'pip')
-        if 'requirements.txt' in req_changed and os.path.exists(pip):
+        req_file = 'requirements-windows.txt' if os.name == 'nt' else 'requirements.txt'
+        pip_bin  = 'Scripts\\pip' if os.name == 'nt' else os.path.join('venv', 'bin', 'pip')
+        pip      = os.path.join(repo_dir, pip_bin)
+        if 'requirements' in req_changed and os.path.exists(pip):
             print('📦  Updating dependencies...')
             subprocess.run([pip, 'install', '-r',
-                            os.path.join(repo_dir, 'requirements.txt'), '-q'],
+                            os.path.join(repo_dir, req_file), '-q'],
                            cwd=repo_dir, timeout=600)
 
         print('🔁  Restarting app with latest version...\n')
@@ -574,15 +576,24 @@ def transcribe_route():
                 cleanup_later(input_path)
                 return
 
-            _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model ~1.6 GB)'
+            _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
 
-            import mlx_whisper
-            result = mlx_whisper.transcribe(
-                wav_path,
-                path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
-                language=language,
-                verbose=False,
-            )
+            try:
+                import mlx_whisper
+                result = mlx_whisper.transcribe(
+                    wav_path,
+                    path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
+                    language=language,
+                    verbose=False,
+                )
+            except ImportError:
+                import whisper as _whisper
+                _tasks[uid]['progress'] = 'Transcribing… (loading Whisper model)'
+                try:
+                    _model = _whisper.load_model('turbo')
+                except Exception:
+                    _model = _whisper.load_model('large-v3')
+                result = _model.transcribe(wav_path, language=language, verbose=False)
 
             segs = [
                 {'start': s['start'], 'end': s['end'], 'text': s['text'].strip()}
