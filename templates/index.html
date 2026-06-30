@@ -320,6 +320,9 @@
       transition: opacity 0.15s;
     }
     .download-btn:hover { opacity: 0.8; }
+    .btn-secondary { display: inline-block; padding: 9px 22px; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 7px; font-weight: 600; font-size: 13px; cursor: pointer; font-family: inherit; transition: background 0.15s; }
+    .btn-secondary:hover { background: #F8F9FA; }
+    .result-actions { display: flex; gap: 10px; flex-wrap: wrap; }
     .result-preview { width: 100%; max-height: 300px; display: block; border-radius: 8px; margin-bottom: 14px; background: #000; }
 
     /* ── Error ── */
@@ -540,7 +543,7 @@
         </div>
       </div>
 
-      <button class="submit-btn" onclick="submit('speed')">Process File</button>
+      <button class="submit-btn" onclick="submit('speed', true)">Preview (60s)</button>
       <div class="progress-wrap" id="pw-speed">
         <div class="progress-meta"><span id="pl-speed">Uploading…</span><span id="pp-speed">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-speed"></div></div>
@@ -1012,20 +1015,35 @@ function showProgress(tab, pct, label) {
   pf.style.width = pct + '%';
 }
 
-function showResult(tab, filename, url) {
+function showResult(tab, filename, url, isPreview = false) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
 
-  let previewHtml = '';
   if (tab === 'speed') {
     const isAudio = /\.(mp3|wav|aac|ogg|flac|m4a)$/i.test(filename);
     const tag = isAudio ? 'audio' : 'video';
-    previewHtml = `<${tag} src="${url}" controls class="result-preview"></${tag}>`;
+    const player = `<${tag} src="${url}" controls class="result-preview"></${tag}>`;
+
+    if (isPreview) {
+      rb.innerHTML = `
+        <div class="result-title">Preview · First 60 seconds at the selected speed</div>
+        ${player}
+        <div class="result-actions">
+          <button class="download-btn" onclick="submit('speed', false)">✓ Process Full Video</button>
+          <button class="btn-secondary" onclick="resetUI('speed')">↩ Change Settings</button>
+        </div>`;
+    } else {
+      rb.innerHTML = `
+        <div class="result-title">✓ Done! Your file is ready.</div>
+        ${player}
+        <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>`;
+    }
+    rb.classList.add('visible');
+    return;
   }
 
   rb.innerHTML = `
     <div class="result-title">✓ Done! Your file is ready.</div>
-    ${previewHtml}
     <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>`;
   rb.classList.add('visible');
 }
@@ -1038,7 +1056,7 @@ function showError(tab, msg) {
 }
 
 // ── Submit ─────────────────────────────────────────────────────────────────
-function submit(tab) {
+function submit(tab, isPreview = false) {
   const form = new FormData();
   let endpoint = '/' + tab;
 
@@ -1053,6 +1071,7 @@ function submit(tab) {
     form.append('video', file);
     form.append('mode',  mode);
     form.append('value', val);
+    if (isPreview) form.append('preview', '1');
 
   } else if (tab === 'compress') {
     const file = document.getElementById('f-compress').files[0];
@@ -1128,7 +1147,7 @@ function submit(tab) {
       const m  = cd.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/);
       const filename = m ? decodeURIComponent(m[1]) : 'output.mp4';
       const url = URL.createObjectURL(xhr.response);
-      showResult(tab, filename, url);
+      showResult(tab, filename, url, isPreview);
     } else {
       xhr.response.text().then(text => {
         let msg = 'Processing failed. Please try again.';

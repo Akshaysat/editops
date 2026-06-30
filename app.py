@@ -157,8 +157,9 @@ def speed_route():
         os.remove(input_path)
         return jsonify(error='Cannot read file. Is it a valid video or audio?'), 400
 
-    mode = request.form.get('mode', 'multiplier')
-    raw  = request.form.get('value', '')
+    mode    = request.form.get('mode', 'multiplier')
+    raw     = request.form.get('value', '')
+    preview = request.form.get('preview') == '1'
 
     try:
         if mode == 'duration':
@@ -174,11 +175,14 @@ def speed_route():
         os.remove(input_path)
         return jsonify(error='Invalid speed / duration value.'), 400
 
+    # -t 60 before -i limits input to 60 s for preview mode
+    t_limit = ['-t', '60'] if preview else []
+
     if not info['has_video']:
         # Audio-only: apply atempo chain, output mp3
         output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
         af = atempo_chain(speed)
-        cmd = ['ffmpeg', '-y', '-i', input_path,
+        cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
                '-filter:a', af, '-c:a', 'libmp3lame', '-b:a', '192k',
                output_path]
         r = subprocess.run(cmd, capture_output=True)
@@ -207,7 +211,7 @@ def speed_route():
              if sys.platform == 'darwin' else \
              ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
 
-    cmd = ['ffmpeg', '-y', '-i', input_path,
+    cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
            '-filter_complex', fc, *maps,
            *vcodec,
            '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
