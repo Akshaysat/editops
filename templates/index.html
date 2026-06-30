@@ -320,6 +320,7 @@
       transition: opacity 0.15s;
     }
     .download-btn:hover { opacity: 0.8; }
+    .result-preview { width: 100%; max-height: 300px; display: block; border-radius: 8px; margin-bottom: 14px; background: #000; }
 
     /* ── Error ── */
     .error-box {
@@ -1014,8 +1015,17 @@ function showProgress(tab, pct, label) {
 function showResult(tab, filename, url) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
+
+  let previewHtml = '';
+  if (tab === 'speed') {
+    const isAudio = /\.(mp3|wav|aac|ogg|flac|m4a)$/i.test(filename);
+    const tag = isAudio ? 'audio' : 'video';
+    previewHtml = `<${tag} src="${url}" controls class="result-preview"></${tag}>`;
+  }
+
   rb.innerHTML = `
-    <div class="result-title">✓ Done! Your video is ready.</div>
+    <div class="result-title">✓ Done! Your file is ready.</div>
+    ${previewHtml}
     <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>`;
   rb.classList.add('visible');
 }
