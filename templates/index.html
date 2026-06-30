@@ -543,7 +543,10 @@
         </div>
       </div>
 
-      <button class="submit-btn" onclick="submit('speed', true)">Preview (60s)</button>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="submit-btn" onclick="submit('speed', true)">Preview (60s)</button>
+        <button class="btn-secondary" onclick="submit('speed', false)">Process Full Video</button>
+      </div>
       <div class="progress-wrap" id="pw-speed">
         <div class="progress-meta"><span id="pl-speed">Uploading…</span><span id="pp-speed">0%</span></div>
         <div class="progress-bar"><div class="progress-fill" id="pf-speed"></div></div>
