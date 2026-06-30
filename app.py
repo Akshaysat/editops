@@ -202,9 +202,14 @@ def speed_route():
     # Match original bitrate so quality is preserved
     bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
 
+    # Use Apple VideoToolbox hardware encoder on macOS (5-10x faster than libx264)
+    vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1'] \
+             if sys.platform == 'darwin' else \
+             ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
+
     cmd = ['ffmpeg', '-y', '-i', input_path,
            '-filter_complex', fc, *maps,
-           '-c:v', 'libx264', '-b:v', bv, '-preset', 'fast',
+           *vcodec,
            '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
            output_path]
 
