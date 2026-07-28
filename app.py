@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, sqlite3
 
 _tasks = {}   # task_id → {status, progress, result, filename, error}
 
@@ -8,6 +8,29 @@ app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20 GB max upload
 
 TEMP_DIR = tempfile.gettempdir()
 NULL_DEV = 'NUL' if os.name == 'nt' else '/dev/null'
+
+# Stored next to app.py (not TEMP_DIR) so it survives restarts, and is
+# git-ignored so auto_update()'s pull never touches it.
+FEEDBACK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'feedback.db')
+
+
+def init_feedback_db():
+    conn = sqlite3.connect(FEEDBACK_DB)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS feedback (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            type       TEXT NOT NULL,
+            message    TEXT NOT NULL,
+            name       TEXT,
+            status     TEXT NOT NULL DEFAULT 'open'
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+
+init_feedback_db()
 
 
 # ── Auto-update ───────────────────────────────────────────────────────────────
@@ -395,6 +418,105 @@ def merge_route():
     return send_file(output_path, as_attachment=True, download_name=download_name)
 
 
+@app.route('/thumbnail', methods=['POST'])
+def thumbnail_route():
+    video_file = request.files.get('video')
+    image_file = request.files.get('image')
+    if not video_file:
+        return jsonify(error='No video uploaded'), 400
+    if not image_file:
+        return jsonify(error='No thumbnail image uploaded'), 400
+
+    try:
+        duration = float(request.form.get('duration', ''))
+        if duration <= 0:
+            raise ValueError
+    except ValueError:
+        return jsonify(error='Please enter a valid duration in seconds.'), 400
+
+    position = request.form.get('position', 'start')
+    if position not in ('start', 'end'):
+        position = 'start'
+
+    video_path, uid = save_upload(video_file)
+    img_ext = os.path.splitext(image_file.filename)[1] or '.jpg'
+    image_path = os.path.join(TEMP_DIR, f'vt_thumb_{uid}{img_ext}')
+    image_file.save(image_path)
+
+    info = ffprobe_info(video_path)
+    if not info or not info['has_video']:
+        for p in (video_path, image_path):
+            try: os.remove(p)
+            except: pass
+        return jsonify(error='Cannot read video file.'), 400
+
+    r = subprocess.run(
+        ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', video_path],
+        capture_output=True, text=True)
+    streams = json.loads(r.stdout).get('streams', []) if r.returncode == 0 else []
+    vstream = next((s for s in streams if s.get('codec_type') == 'video'), None)
+    astream = next((s for s in streams if s.get('codec_type') == 'audio'), None)
+
+    width, height = (vstream.get('width'), vstream.get('height')) if vstream else (None, None)
+    fps = vstream.get('r_frame_rate', '25/1') if vstream else '25/1'
+    if not width or not height:
+        for p in (video_path, image_path):
+            try: os.remove(p)
+            except: pass
+        return jsonify(error='Cannot read video dimensions.'), 400
+
+    has_audio   = astream is not None
+    sample_rate = astream.get('sample_rate', '44100') if astream else '44100'
+    layout      = 'mono' if has_audio and int(astream.get('channels', 2)) == 1 else 'stereo'
+
+    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+
+    # Scale+letterbox the image to the video's frame, then splice with concat.
+    img_v = (f'[1:v]scale={width}:{height}:force_original_aspect_ratio=decrease,'
+             f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,'
+             f'setsar=1,fps={fps},format=yuv420p[imgv]')
+    vid_v = f'[0:v]setsar=1,fps={fps},format=yuv420p[vidv]'
+
+    if has_audio:
+        img_a = (f'anullsrc=channel_layout={layout}:sample_rate={sample_rate},'
+                 f'atrim=duration={duration}[imga]')
+        concat = ('[imgv][imga][vidv][0:a]concat=n=2:v=1:a=1[outv][outa]' if position == 'start'
+                  else '[vidv][0:a][imgv][imga]concat=n=2:v=1:a=1[outv][outa]')
+        fc   = ';'.join([img_v, vid_v, img_a, concat])
+        maps = ['-map', '[outv]', '-map', '[outa]']
+    else:
+        concat = ('[imgv][vidv]concat=n=2:v=1:a=0[outv]' if position == 'start'
+                  else '[vidv][imgv]concat=n=2:v=1:a=0[outv]')
+        fc   = ';'.join([img_v, vid_v, concat])
+        maps = ['-map', '[outv]']
+
+    # Match original bitrate so quality is preserved (same approach as /speed)
+    bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
+    vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1'] \
+             if sys.platform == 'darwin' else \
+             ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
+
+    cmd = ['ffmpeg', '-y',
+           '-i', video_path,
+           '-loop', '1', '-t', str(duration), '-i', image_path,
+           '-filter_complex', fc, *maps,
+           *vcodec,
+           '-c:a', 'aac', '-b:a', '192k',
+           '-movflags', '+faststart',
+           output_path]
+
+    r = subprocess.run(cmd, capture_output=True)
+    cleanup_later(video_path)
+    cleanup_later(image_path)
+
+    if r.returncode != 0:
+        return jsonify(error='Failed to stitch thumbnail into video.'), 500
+
+    cleanup_later(output_path)
+    return send_file(output_path, as_attachment=True,
+                     download_name=f'{stem(video_file.filename)}_with_thumbnail.mp4')
+
+
 @app.route('/convert', methods=['POST'])
 def convert_route():
     file = request.files.get('video')
@@ -454,6 +576,59 @@ def convert_route():
     cleanup_later(output_path)
     out_name = f'{stem(file.filename)}{cfg["ext"]}'
     return send_file(output_path, as_attachment=True, download_name=out_name)
+
+
+@app.route('/feedback', methods=['POST'])
+def feedback_submit():
+    data = request.get_json(silent=True) or request.form
+    fb_type = (data.get('type') or 'bug').strip()
+    message = (data.get('message') or '').strip()
+    name    = (data.get('name') or '').strip()
+
+    if fb_type not in ('bug', 'idea'):
+        fb_type = 'bug'
+    if not message:
+        return jsonify(error='Please enter a description.'), 400
+
+    conn = sqlite3.connect(FEEDBACK_DB)
+    conn.execute(
+        'INSERT INTO feedback (created_at, type, message, name, status) VALUES (?, ?, ?, ?, ?)',
+        (time.strftime('%Y-%m-%d %H:%M'), fb_type, message, name, 'open'))
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route('/feedback/list')
+def feedback_list():
+    conn = sqlite3.connect(FEEDBACK_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute('SELECT * FROM feedback ORDER BY id DESC').fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/feedback/<int:fb_id>/status', methods=['POST'])
+def feedback_set_status(fb_id):
+    data = request.get_json(silent=True) or request.form
+    status = data.get('status')
+    if status not in ('open', 'resolved'):
+        return jsonify(error='Invalid status'), 400
+
+    conn = sqlite3.connect(FEEDBACK_DB)
+    conn.execute('UPDATE feedback SET status = ? WHERE id = ?', (status, fb_id))
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True)
+
+
+@app.route('/feedback/<int:fb_id>/delete', methods=['POST'])
+def feedback_delete(fb_id):
+    conn = sqlite3.connect(FEEDBACK_DB)
+    conn.execute('DELETE FROM feedback WHERE id = ?', (fb_id,))
+    conn.commit()
+    conn.close()
+    return jsonify(ok=True)
 
 
 @app.route('/ytdl', methods=['POST'])

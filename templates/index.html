@@ -198,6 +198,20 @@
     }
     .field input:focus { outline: none; border-color: var(--text); }
     .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+    .field textarea {
+      width: 100%;
+      background: #FAFAFA;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 9px 13px;
+      color: var(--text);
+      font-size: 13.5px;
+      font-family: 'Inter', sans-serif;
+      transition: border-color 0.15s;
+      resize: vertical;
+      min-height: 90px;
+    }
+    .field textarea:focus { outline: none; border-color: var(--text); }
 
     /* ── Radio Group ── */
     .radio-group { display: flex; gap: 8px; }
@@ -467,6 +481,40 @@
 
     /* ── Divider ── */
     .divider { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
+
+    /* ── Feedback list ── */
+    .fb-list { margin-top: 4px; }
+    .fb-item {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      background: #FAFAFA;
+    }
+    .fb-item.resolved { opacity: 0.55; }
+    .fb-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+    .fb-badge {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 3px 8px;
+      border-radius: 100px;
+      white-space: nowrap;
+    }
+    .fb-badge.bug            { background: #FDF3F3; color: var(--error); }
+    .fb-badge.idea           { background: #EEF3FF; color: #2C5CC5; }
+    .fb-badge.status-resolved { background: #F0FAF3; color: var(--success); }
+    .fb-item-meta { font-size: 11.5px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+    .fb-item-msg { font-size: 13.5px; color: var(--text); line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
+    .fb-item-actions { display: flex; gap: 8px; }
+    .fb-item-actions button {
+      font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .fb-item-actions button:hover { color: var(--text); border-color: var(--text); }
+    .fb-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 20px 0; }
   </style>
 </head>
 <body>
@@ -482,11 +530,14 @@
     <button class="nav-item"        data-tab="compress"   onclick="switchTab(this,'compress')"><span class="ni">◈</span> Compress</button>
     <button class="nav-item"        data-tab="trim"       onclick="switchTab(this,'trim')"><span class="ni">✂</span> Trim</button>
     <button class="nav-item"        data-tab="merge"      onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
+    <button class="nav-item"        data-tab="thumbnail"  onclick="switchTab(this,'thumbnail')"><span class="ni">🖼</span> Thumbnail</button>
     <button class="nav-item"        data-tab="convert"    onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <div class="nav-section">Download</div>
     <button class="nav-item"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
+    <div class="nav-section">Support</div>
+    <button class="nav-item"        data-tab="feedback"   onclick="switchTab(this,'feedback')"><span class="ni">💬</span> Feedback</button>
   </nav>
   <div class="sidebar-user">
     <div class="su-name">Money Mediia</div>
@@ -670,6 +721,60 @@
     </div>
   </div>
 
+  <!-- ══ THUMBNAIL ══ -->
+  <div id="panel-thumbnail" class="panel">
+    <div class="page-header"><h1>Add Thumbnail</h1><p>Stitch a thumbnail image into your video as a still frame, held for a chosen number of seconds, at the start or end.</p></div>
+    <div class="card">
+      <h2>Add Thumbnail</h2>
+      <p class="desc">Merge a video with a thumbnail image.</p>
+
+      <div class="dropzone" id="dz-thumbnail-video" onclick="document.getElementById('f-thumbnail-video').click()">
+        <div class="dz-icon">🎥</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-thumbnail-video"></div>
+        <input type="file" id="f-thumbnail-video" accept="video/*" style="display:none" onchange="onFile(this,'thumbnail-video')">
+      </div>
+
+      <div class="dropzone" id="dz-thumbnail-image" onclick="document.getElementById('f-thumbnail-image').click()" style="margin-top:14px;">
+        <div class="dz-icon">🖼</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your thumbnail image here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-thumbnail-image"></div>
+        <input type="file" id="f-thumbnail-image" accept="image/*" style="display:none" onchange="onFile(this,'thumbnail-image')">
+      </div>
+
+      <div class="field">
+        <label>Duration (seconds)</label>
+        <input type="number" id="thumb-duration" value="3" min="0.1" step="0.1" placeholder="e.g. 3">
+        <div class="hint">How long the thumbnail image is held on screen</div>
+      </div>
+
+      <div class="field">
+        <label>Position</label>
+        <div class="radio-group">
+          <div class="radio-opt">
+            <input type="radio" name="thumb-pos" id="thumb-pos-start" value="start" checked>
+            <label for="thumb-pos-start">⏮ Start of video</label>
+          </div>
+          <div class="radio-opt">
+            <input type="radio" name="thumb-pos" id="thumb-pos-end" value="end">
+            <label for="thumb-pos-end">⏭ End of video</label>
+          </div>
+        </div>
+      </div>
+
+      <button class="submit-btn" onclick="submit('thumbnail')">Add Thumbnail</button>
+      <div class="progress-wrap" id="pw-thumbnail">
+        <div class="progress-meta"><span id="pl-thumbnail">Uploading…</span><span id="pp-thumbnail">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-thumbnail"></div></div>
+      </div>
+      <div class="result-box" id="rb-thumbnail"></div>
+      <div class="error-box"  id="eb-thumbnail"></div>
+    </div>
+  </div>
 
   <!-- ══ TRANSCRIBE ══ -->
   <div id="panel-transcribe" class="panel">
@@ -842,6 +947,48 @@
     </div>
   </div>
 
+  <!-- ══ FEEDBACK ══ -->
+  <div id="panel-feedback" class="panel">
+    <div class="page-header"><h1>Feedback</h1><p>Found a bug or have an idea for EditOps? Let us know below — everyone using this app can see and track reports here.</p></div>
+    <div class="card">
+      <h2>Feedback</h2>
+      <p class="desc">Feedback</p>
+
+      <div class="field">
+        <label>Type</label>
+        <div class="radio-group">
+          <div class="radio-opt">
+            <input type="radio" name="fb-type" id="fb-t-bug" value="bug" checked>
+            <label for="fb-t-bug">🐛 Bug</label>
+          </div>
+          <div class="radio-opt">
+            <input type="radio" name="fb-type" id="fb-t-idea" value="idea">
+            <label for="fb-t-idea">💡 Feature Idea</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Your Name (optional)</label>
+        <input type="text" id="fb-name" placeholder="e.g. Priya">
+      </div>
+
+      <div class="field">
+        <label>Description</label>
+        <textarea id="fb-message" placeholder="What happened, or what would you like to see?"></textarea>
+      </div>
+
+      <button class="submit-btn" onclick="submitFeedback()">Send Feedback</button>
+      <div class="result-box" id="rb-feedback"></div>
+      <div class="error-box"  id="eb-feedback"></div>
+
+      <hr class="divider">
+
+      <h2 style="display:block;font-size:14px;font-weight:700;margin-bottom:12px;color:var(--text);">Recent Reports</h2>
+      <div class="fb-list" id="fb-list"><div class="fb-empty">Loading…</div></div>
+    </div>
+  </div>
+
 </div><!-- .content -->
 </main>
 
@@ -860,6 +1007,92 @@ function switchTab(btn, tab) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
+  if (tab === 'feedback') loadFeedbackList();
+}
+
+// ── Feedback ───────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : s;
+  return d.innerHTML;
+}
+
+function submitFeedback() {
+  const type    = document.querySelector('input[name="fb-type"]:checked').value;
+  const name    = document.getElementById('fb-name').value.trim();
+  const message = document.getElementById('fb-message').value.trim();
+  const eb = document.getElementById('eb-feedback');
+  const rb = document.getElementById('rb-feedback');
+  eb.classList.remove('visible');
+  rb.classList.remove('visible');
+
+  if (!message) {
+    eb.textContent = 'Please enter a description.';
+    eb.classList.add('visible');
+    return;
+  }
+
+  fetch('/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, name, message })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        eb.textContent = data.error;
+        eb.classList.add('visible');
+        return;
+      }
+      document.getElementById('fb-message').value = '';
+      document.getElementById('fb-name').value = '';
+      rb.innerHTML = '<div class="result-title">✓ Thanks — feedback sent!</div>';
+      rb.classList.add('visible');
+      loadFeedbackList();
+    })
+    .catch(() => {
+      eb.textContent = 'Failed to send feedback. Is the server running?';
+      eb.classList.add('visible');
+    });
+}
+
+function loadFeedbackList() {
+  const list = document.getElementById('fb-list');
+  fetch('/feedback/list')
+    .then(r => r.json())
+    .then(items => {
+      if (!items.length) {
+        list.innerHTML = '<div class="fb-empty">No feedback yet.</div>';
+        return;
+      }
+      list.innerHTML = items.map(it => `
+        <div class="fb-item ${it.status === 'resolved' ? 'resolved' : ''}">
+          <div class="fb-item-top">
+            <span class="fb-badge ${it.type}">${it.type === 'bug' ? '🐛 Bug' : '💡 Idea'}</span>
+            ${it.status === 'resolved' ? '<span class="fb-badge status-resolved">✓ Resolved</span>' : ''}
+            <span class="fb-item-meta">${it.name ? escapeHtml(it.name) + ' · ' : ''}${escapeHtml(it.created_at)}</span>
+          </div>
+          <div class="fb-item-msg">${escapeHtml(it.message)}</div>
+          <div class="fb-item-actions">
+            <button onclick="setFeedbackStatus(${it.id}, '${it.status === 'resolved' ? 'open' : 'resolved'}')">${it.status === 'resolved' ? 'Reopen' : 'Mark Resolved'}</button>
+            <button onclick="deleteFeedback(${it.id})">Delete</button>
+          </div>
+        </div>`).join('');
+    })
+    .catch(() => { list.innerHTML = '<div class="fb-empty">Could not load feedback.</div>'; });
+}
+
+function setFeedbackStatus(id, status) {
+  fetch(`/feedback/${id}/status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status })
+  }).then(loadFeedbackList);
+}
+
+function deleteFeedback(id) {
+  if (!confirm('Delete this feedback entry?')) return;
+  fetch(`/feedback/${id}/delete`, { method: 'POST' }).then(loadFeedbackList);
 }
 
 // ── Conditional sections (speed mode) ─────────────────────────────────────
@@ -1022,12 +1255,12 @@ function showResult(tab, filename, url, isPreview = false) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
 
-  if (tab === 'speed') {
+  if (tab === 'speed' || tab === 'thumbnail') {
     const isAudio = /\.(mp3|wav|aac|ogg|flac|m4a)$/i.test(filename);
     const tag = isAudio ? 'audio' : 'video';
     const player = `<${tag} src="${url}" controls class="result-preview"></${tag}>`;
 
-    if (isPreview) {
+    if (tab === 'speed' && isPreview) {
       rb.innerHTML = `
         <div class="result-title">Preview · First 60 seconds at the selected speed</div>
         ${player}
@@ -1097,6 +1330,19 @@ function submit(tab, isPreview = false) {
   } else if (tab === 'merge') {
     if (mergeFiles.length < 2) return alert('Please select at least 2 videos.');
     mergeFiles.forEach(f => form.append('videos', f));
+
+  } else if (tab === 'thumbnail') {
+    const video = document.getElementById('f-thumbnail-video').files[0];
+    const image = document.getElementById('f-thumbnail-image').files[0];
+    if (!video) return alert('Please select a video first.');
+    if (!image) return alert('Please select a thumbnail image.');
+    const duration = document.getElementById('thumb-duration').value.trim();
+    if (!duration || parseFloat(duration) <= 0) return alert('Please enter a valid duration in seconds.');
+    const position = document.querySelector('input[name="thumb-pos"]:checked').value;
+    form.append('video', video);
+    form.append('image', image);
+    form.append('duration', duration);
+    form.append('position', position);
 
   } else if (tab === 'convert') {
     const file = document.getElementById('f-convert').files[0];
