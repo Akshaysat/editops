@@ -24,7 +24,7 @@ if %errorlevel% neq 0 (
 
 REM Create venv if missing
 if not exist "venv" (
-    echo  Setting up virtual environment (first time only)...
+    echo  Setting up virtual environment - first time only...
     python -m venv venv
 )
 
