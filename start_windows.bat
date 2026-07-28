@@ -39,13 +39,21 @@ for /f "tokens=5" %%p in ('netstat -aon ^| findstr ":5001 "') do (
 
 REM Start server in background
 echo  Starting server...
-start /b call venv\Scripts\python app.py
+start /b venv\Scripts\python app.py
 
 REM Wait until server is responding, then open browser
 echo  Waiting for server to start...
+set /a tries=0
 :wait_loop
+set /a tries+=1
+if %tries% gtr 60 (
+    echo  [ERROR] Server did not respond after 60 seconds.
+    echo  Check the messages above for errors from app.py.
+    pause
+    exit /b 1
+)
 timeout /t 1 /nobreak >nul
-powershell -Command "try { Invoke-WebRequest http://localhost:5001 -UseBasicParsing -TimeoutSec 1 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+curl -s -o nul http://localhost:5001
 if %errorlevel% neq 0 goto wait_loop
 
 echo  Opening browser...
