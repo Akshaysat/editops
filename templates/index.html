@@ -1017,6 +1017,13 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function fmtFbDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return escapeHtml(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function submitFeedback() {
   const type    = document.querySelector('input[name="fb-type"]:checked').value;
   const name    = document.getElementById('fb-name').value.trim();
@@ -1070,7 +1077,7 @@ function loadFeedbackList() {
           <div class="fb-item-top">
             <span class="fb-badge ${it.type}">${it.type === 'bug' ? '🐛 Bug' : '💡 Idea'}</span>
             ${it.status === 'resolved' ? '<span class="fb-badge status-resolved">✓ Resolved</span>' : ''}
-            <span class="fb-item-meta">${it.name ? escapeHtml(it.name) + ' · ' : ''}${escapeHtml(it.created_at)}</span>
+            <span class="fb-item-meta">${it.name ? escapeHtml(it.name) + ' · ' : ''}${fmtFbDate(it.created_at)}</span>
           </div>
           <div class="fb-item-msg">${escapeHtml(it.message)}</div>
           <div class="fb-item-actions">

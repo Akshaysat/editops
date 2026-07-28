@@ -1,5 +1,6 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, sqlite3
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob
+import urllib.request, urllib.error
 
 _tasks = {}   # task_id → {status, progress, result, filename, error}
 
@@ -9,28 +10,35 @@ app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20 GB max upload
 TEMP_DIR = tempfile.gettempdir()
 NULL_DEV = 'NUL' if os.name == 'nt' else '/dev/null'
 
-# Stored next to app.py (not TEMP_DIR) so it survives restarts, and is
-# git-ignored so auto_update()'s pull never touches it.
-FEEDBACK_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'feedback.db')
+# Every teammate runs their own local copy of this app, so feedback can't
+# just live in a local file — it needs to land somewhere shared. This key
+# is Supabase's "anon" public key: it's meant to be embedded in distributed
+# client code like this. Access is restricted by the table's Row Level
+# Security policies (insert/select/update/delete on `feedback` only), not
+# by keeping the key secret.
+SUPABASE_URL      = 'https://yewhqjkdbmkrzosyuwwa.supabase.co'
+SUPABASE_ANON_KEY = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIs'
+                      'InJlZiI6Inlld2hxamtkYm1rcnpvc3l1d3dhIiwicm9sZSI6ImFub24iLCJp'
+                      'YXQiOjE3ODUyNTIxNzAsImV4cCI6MjEwMDgyODE3MH0.e9ySko38XKZcrl9H'
+                      'vzp6T9XmmZZjQ0avop2gFZAztQM')
 
 
-def init_feedback_db():
-    conn = sqlite3.connect(FEEDBACK_DB)
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS feedback (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            type       TEXT NOT NULL,
-            message    TEXT NOT NULL,
-            name       TEXT,
-            status     TEXT NOT NULL DEFAULT 'open'
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-
-init_feedback_db()
+def supabase_request(method, path, body=None):
+    """Call the Supabase REST (PostgREST) API for the `feedback` table."""
+    req = urllib.request.Request(
+        f'{SUPABASE_URL}/rest/v1/{path}',
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={
+            'apikey':        SUPABASE_ANON_KEY,
+            'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
+            'Content-Type':  'application/json',
+            'Prefer':        'return=representation',
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else None
 
 
 # ── Auto-update ───────────────────────────────────────────────────────────────
@@ -590,22 +598,20 @@ def feedback_submit():
     if not message:
         return jsonify(error='Please enter a description.'), 400
 
-    conn = sqlite3.connect(FEEDBACK_DB)
-    conn.execute(
-        'INSERT INTO feedback (created_at, type, message, name, status) VALUES (?, ?, ?, ?, ?)',
-        (time.strftime('%Y-%m-%d %H:%M'), fb_type, message, name, 'open'))
-    conn.commit()
-    conn.close()
+    try:
+        supabase_request('POST', 'feedback', {'type': fb_type, 'message': message, 'name': name})
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
     return jsonify(ok=True)
 
 
 @app.route('/feedback/list')
 def feedback_list():
-    conn = sqlite3.connect(FEEDBACK_DB)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute('SELECT * FROM feedback ORDER BY id DESC').fetchall()
-    conn.close()
-    return jsonify([dict(r) for r in rows])
+    try:
+        rows = supabase_request('GET', 'feedback?select=*&order=id.desc')
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+    return jsonify(rows)
 
 
 @app.route('/feedback/<int:fb_id>/status', methods=['POST'])
@@ -615,19 +621,19 @@ def feedback_set_status(fb_id):
     if status not in ('open', 'resolved'):
         return jsonify(error='Invalid status'), 400
 
-    conn = sqlite3.connect(FEEDBACK_DB)
-    conn.execute('UPDATE feedback SET status = ? WHERE id = ?', (status, fb_id))
-    conn.commit()
-    conn.close()
+    try:
+        supabase_request('PATCH', f'feedback?id=eq.{fb_id}', {'status': status})
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
     return jsonify(ok=True)
 
 
 @app.route('/feedback/<int:fb_id>/delete', methods=['POST'])
 def feedback_delete(fb_id):
-    conn = sqlite3.connect(FEEDBACK_DB)
-    conn.execute('DELETE FROM feedback WHERE id = ?', (fb_id,))
-    conn.commit()
-    conn.close()
+    try:
+        supabase_request('DELETE', f'feedback?id=eq.{fb_id}')
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
     return jsonify(ok=True)
 
 
