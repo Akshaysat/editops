@@ -467,8 +467,13 @@ def ytdl_route():
     uid = str(uuid.uuid4())
     out_tmpl = os.path.join(TEMP_DIR, f'vt_yt_{uid}.%(ext)s')
 
+    # Invoke yt-dlp as a module of the running interpreter rather than a bare
+    # command — on Windows the launcher never activates the venv, so a plain
+    # 'yt-dlp' on PATH would not resolve to venv\Scripts\yt-dlp.exe.
+    ytdlp_base = [sys.executable, '-m', 'yt_dlp']
+
     if quality == 'audio':
-        cmd = ['yt-dlp', '-x', '--audio-format', 'mp3', '--audio-quality', '0',
+        cmd = [*ytdlp_base, '-x', '--audio-format', 'mp3', '--audio-quality', '0',
                '-N', '4',
                '--no-playlist', '--print', '%(title)s', '--no-simulate',
                '-o', out_tmpl, url]
@@ -480,7 +485,7 @@ def ytdl_route():
             f'/bestvideo[height<={quality}]+bestaudio'
             f'/best[height<={quality}]'
         )
-        cmd = ['yt-dlp', '-f', fmt, '--merge-output-format', 'mp4',
+        cmd = [*ytdlp_base, '-f', fmt, '--merge-output-format', 'mp4',
                '-N', '4',
                '--no-playlist', '--print', '%(title)s', '--no-simulate',
                '-o', out_tmpl, url]
