@@ -542,6 +542,8 @@
     <button class="nav-item"        data-tab="merge"      onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
     <button class="nav-item"        data-tab="thumbnail"  onclick="switchTab(this,'thumbnail')"><span class="ni">🖼</span> Thumbnail</button>
     <button class="nav-item"        data-tab="convert"    onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
+    <div class="nav-section">Motion Graphics</div>
+    <button class="nav-item"        data-tab="svg2aep"    onclick="switchTab(this,'svg2aep')"><span class="ni">◆</span> SVG → After Effects</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <div class="nav-section">Download</div>
@@ -958,6 +960,37 @@
     </div>
   </div>
 
+  <!-- ══ SVG TO AFTER EFFECTS ══ -->
+  <div id="panel-svg2aep" class="panel">
+    <div class="page-header"><h1>SVG → After Effects</h1><p>Generate a script that rebuilds your SVG as editable, animation-ready shape layers in After Effects.</p></div>
+    <div class="card">
+      <h2>SVG → After Effects</h2>
+      <p class="desc">SVG to AE</p>
+
+      <div class="dropzone" id="dz-svg2aep" onclick="document.getElementById('f-svg2aep').click()">
+        <div class="dz-icon">◆</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your SVG here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-svg2aep"></div>
+        <input type="file" id="f-svg2aep" accept=".svg,image/svg+xml" style="display:none" onchange="onFile(this,'svg2aep')">
+      </div>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        📐 v1 supports flat fills and strokes only — gradients, patterns, filters, images, and text aren't converted yet.<br>
+        🎬 This generates a <b>.jsx script</b>, not a finished .aep. Requires After Effects to run it: <b>File → Scripts → Run Script File…</b>
+      </div>
+
+      <button class="submit-btn" onclick="submit('svg2aep')">Generate AE Script</button>
+      <div class="progress-wrap" id="pw-svg2aep">
+        <div class="progress-meta"><span id="pl-svg2aep">Uploading…</span><span id="pp-svg2aep">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-svg2aep"></div></div>
+      </div>
+      <div class="result-box" id="rb-svg2aep"></div>
+      <div class="error-box"  id="eb-svg2aep"></div>
+    </div>
+  </div>
+
   <!-- ══ FEEDBACK ══ -->
   <div id="panel-feedback" class="panel">
     <div class="page-header"><h1>Feedback</h1><p>Found a bug or have an idea for EditOps? Let us know below — everyone using this app can see and track reports here.</p></div>
@@ -1269,9 +1302,32 @@ function showProgress(tab, pct, label) {
   pf.style.width = pct + '%';
 }
 
-function showResult(tab, filename, url, isPreview = false) {
+function showResult(tab, filename, url, isPreview = false, xhr = null) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
+
+  if (tab === 'svg2aep') {
+    const shapeCount = xhr ? xhr.getResponseHeader('X-Shape-Count') : null;
+    let warnings = [];
+    try {
+      const raw = xhr ? xhr.getResponseHeader('X-Warnings') : null;
+      warnings = raw ? JSON.parse(decodeURIComponent(raw)) : [];
+    } catch {}
+    const warnHtml = warnings.length
+      ? `<div class="hint" style="text-align:left;margin-top:14px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;">` +
+        warnings.map(w => '⚠️ ' + escapeHtml(w)).join('<br>') + `</div>`
+      : '';
+    rb.innerHTML = `
+      <div class="result-title">✓ Script generated — ${shapeCount || '?'} shape(s) converted</div>
+      <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>
+      <div class="hint" style="margin-top:14px;text-align:left;">
+        Open <b>After Effects</b> → <b>File → Scripts → Run Script File…</b> → select this file.
+        It builds the composition and prompts you to save the .aep.
+      </div>
+      ${warnHtml}`;
+    rb.classList.add('visible');
+    return;
+  }
 
   if (tab === 'speed' || tab === 'thumbnail') {
     const isAudio = /\.(mp3|wav|aac|ogg|flac|m4a)$/i.test(filename);
@@ -1368,6 +1424,11 @@ function submit(tab, isPreview = false) {
     const fmt = document.querySelector('input[name="cvt-fmt"]:checked').value;
     form.append('video',  file);
     form.append('format', fmt);
+
+  } else if (tab === 'svg2aep') {
+    const file = document.getElementById('f-svg2aep').files[0];
+    if (!file) return alert('Please select an SVG file first.');
+    form.append('svg', file);
   }
 
   resetUI(tab);
@@ -1414,7 +1475,7 @@ function submit(tab, isPreview = false) {
       const m  = cd.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/);
       const filename = m ? decodeURIComponent(m[1]) : 'output.mp4';
       const url = URL.createObjectURL(xhr.response);
-      showResult(tab, filename, url, isPreview);
+      showResult(tab, filename, url, isPreview, xhr);
     } else {
       xhr.response.text().then(text => {
         let msg = 'Processing failed. Please try again.';

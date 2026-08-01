@@ -1,6 +1,6 @@
 from flask import Flask, request, render_template, send_file, jsonify
 import subprocess, os, uuid, json, tempfile, threading, time, sys, glob
-import urllib.request, urllib.error
+import urllib.request, urllib.error, urllib.parse
 
 _tasks = {}   # task_id → {status, progress, result, filename, error}
 
@@ -584,6 +584,268 @@ def convert_route():
     cleanup_later(output_path)
     out_name = f'{stem(file.filename)}{cfg["ext"]}'
     return send_file(output_path, as_attachment=True, download_name=out_name)
+
+
+# ── SVG to After Effects ────────────────────────────────────────────────────
+# There's no library that writes a valid .aep from scratch — it's an
+# undocumented Adobe binary format. Instead we generate an ExtendScript
+# (.jsx) that uses AE's own documented scripting API to build the shape
+# layers and save the project; the user runs it inside After Effects via
+# File > Scripts > Run Script File.
+
+def _pt(p):
+    return [p.x, p.y]
+
+
+def svg_shape_subpaths(el):
+    """Walk one SVG shape's segments into AE-style subpaths: vertices plus
+    inTangents/outTangents (relative offsets from their vertex, AE's shape
+    path convention), and a closed flag. Arcs are approximated with cubic
+    Beziers since AE shape paths have no native arc segment."""
+    from svgelements import Path, Move, Close, Line, CubicBezier, QuadraticBezier, Arc
+
+    path = el if isinstance(el, Path) else Path(el)
+    subpaths = []
+    verts = inT = outT = None
+    closed = False
+
+    def flush():
+        if verts and len(verts) > 1:
+            subpaths.append({'vertices': verts, 'inTangents': inT, 'outTangents': outT, 'closed': closed})
+
+    def add_cubic(c1x, c1y, c2x, c2y, end):
+        outT[-1] = [c1x - verts[-1][0], c1y - verts[-1][1]]
+        verts.append(_pt(end))
+        inT.append([c2x - end.x, c2y - end.y])
+        outT.append([0, 0])
+
+    for seg in path.segments():
+        if isinstance(seg, Move):
+            flush()
+            verts, inT, outT, closed = [_pt(seg.end)], [[0, 0]], [[0, 0]], False
+        elif isinstance(seg, Close):
+            closed = True
+        elif isinstance(seg, Line):
+            verts.append(_pt(seg.end))
+            inT.append([0, 0])
+            outT.append([0, 0])
+        elif isinstance(seg, CubicBezier):
+            add_cubic(seg.control1.x, seg.control1.y, seg.control2.x, seg.control2.y, seg.end)
+        elif isinstance(seg, QuadraticBezier):
+            c1x = seg.start.x + 2 / 3 * (seg.control.x - seg.start.x)
+            c1y = seg.start.y + 2 / 3 * (seg.control.y - seg.start.y)
+            c2x = seg.end.x   + 2 / 3 * (seg.control.x - seg.end.x)
+            c2y = seg.end.y   + 2 / 3 * (seg.control.y - seg.end.y)
+            add_cubic(c1x, c1y, c2x, c2y, seg.end)
+        elif isinstance(seg, Arc):
+            for cb in seg.as_cubic_curves():
+                add_cubic(cb.control1.x, cb.control1.y, cb.control2.x, cb.control2.y, cb.end)
+    flush()
+
+    # AE draws the closing segment between the last and first vertex
+    # implicitly when closed=True; drop a duplicate final vertex that lands
+    # back on the start point so that segment isn't zero-length.
+    for sp in subpaths:
+        if sp['closed'] and len(sp['vertices']) > 1:
+            fx, fy = sp['vertices'][0]
+            lx, ly = sp['vertices'][-1]
+            if abs(fx - lx) < 1e-4 and abs(fy - ly) < 1e-4:
+                sp['inTangents'][0] = sp['inTangents'].pop()
+                sp['vertices'].pop()
+                sp['outTangents'].pop()
+    return [sp for sp in subpaths if len(sp['vertices']) > 1]
+
+
+def svg_color(c):
+    # svgelements' lazy style resolution can hand back a Color object with
+    # unset (None) channels for "no color" instead of Python None, depending
+    # on what other properties were accessed first on the same element —
+    # treat both as "no color".
+    if c is None or c.red is None:
+        return None
+    return {'rgb': [c.red / 255.0, c.green / 255.0, c.blue / 255.0],
+            'opacity': c.opacity if c.opacity is not None else 1.0}
+
+
+def parse_svg_for_ae(svg_path):
+    """Returns (width, height, shapes, warnings). Flat fills/strokes only —
+    gradients, patterns, filters, images and text aren't supported yet."""
+    import re
+    from svgelements import SVG, Shape
+
+    warnings = []
+    svg = SVG.parse(svg_path)
+    width  = int(round(svg.width or 500))
+    height = int(round(svg.height or 500))
+
+    with open(svg_path, 'r', encoding='utf-8', errors='ignore') as f:
+        raw = f.read()
+    gradient_count = (len(re.findall(r'(?:fill|stroke)\s*=\s*["\']url\(#', raw))
+                       + raw.count('fill:url(#') + raw.count('stroke:url(#'))
+    if gradient_count:
+        warnings.append(f'{gradient_count} shape(s) use gradients or patterns — '
+                         f'not supported yet, flat colors were used instead.')
+
+    skipped_text = 0
+    shapes = []
+    for el in svg.elements():
+        if not isinstance(el, Shape):
+            if type(el).__name__ == 'Text':
+                skipped_text += 1
+            continue
+        subpaths = svg_shape_subpaths(el)
+        if not subpaths:
+            continue
+        opacity = getattr(el, 'opacity', None)
+        opacity = opacity if isinstance(opacity, (int, float)) else 1.0
+        shapes.append({
+            'name':         getattr(el, 'id', None) or f'Shape {len(shapes) + 1}',
+            'subpaths':     subpaths,
+            'fill':         svg_color(el.fill),
+            'stroke':       svg_color(el.stroke),
+            'stroke_width': float(el.stroke_width or 1.0),
+            'opacity':      opacity,
+        })
+
+    if skipped_text:
+        warnings.append(f"{skipped_text} text element(s) skipped — text isn't "
+                         f"supported yet; convert text to outlines in your SVG editor first.")
+
+    return width, height, shapes, warnings
+
+
+def jsx_shape_layer(shape, idx):
+    name = json.dumps(shape['name'])
+    lines = [
+        '  try {',
+        f'    var layer{idx} = comp.layers.addShape();',
+        f'    layer{idx}.name = {name};',
+        f'    var contents{idx} = layer{idx}.property("ADBE Root Vectors Group");',
+        f'    var group{idx} = contents{idx}.addProperty("ADBE Vector Group");',
+        f'    group{idx}.name = {name};',
+        f'    var groupContents{idx} = group{idx}.property("ADBE Vectors Group");',
+    ]
+
+    for si, sp in enumerate(shape['subpaths']):
+        lines += [
+            f'    var pathProp{idx}_{si} = groupContents{idx}.addProperty("ADBE Vector Shape - Group");',
+            f'    var shapeVal{idx}_{si} = pathProp{idx}_{si}.property("ADBE Vector Shape").value;',
+            f'    shapeVal{idx}_{si}.vertices = {json.dumps(sp["vertices"])};',
+            f'    shapeVal{idx}_{si}.inTangents = {json.dumps(sp["inTangents"])};',
+            f'    shapeVal{idx}_{si}.outTangents = {json.dumps(sp["outTangents"])};',
+            f'    shapeVal{idx}_{si}.closed = {"true" if sp["closed"] else "false"};',
+            f'    pathProp{idx}_{si}.property("ADBE Vector Shape").setValue(shapeVal{idx}_{si});',
+        ]
+
+    if shape['fill']:
+        r, g, b = shape['fill']['rgb']
+        op = shape['fill']['opacity'] * shape['opacity'] * 100
+        lines += [
+            f'    var fill{idx} = groupContents{idx}.addProperty("ADBE Vector Graphic - Fill");',
+            f'    fill{idx}.property("ADBE Vector Fill Color").setValue([{r:.4f}, {g:.4f}, {b:.4f}]);',
+            f'    fill{idx}.property("ADBE Vector Fill Opacity").setValue({op:.2f});',
+        ]
+
+    if shape['stroke']:
+        r, g, b = shape['stroke']['rgb']
+        op = shape['stroke']['opacity'] * shape['opacity'] * 100
+        lines += [
+            f'    var stroke{idx} = groupContents{idx}.addProperty("ADBE Vector Graphic - Stroke");',
+            f'    stroke{idx}.property("ADBE Vector Stroke Color").setValue([{r:.4f}, {g:.4f}, {b:.4f}]);',
+            f'    stroke{idx}.property("ADBE Vector Stroke Width").setValue({shape["stroke_width"]:.3f});',
+            f'    stroke{idx}.property("ADBE Vector Stroke Opacity").setValue({op:.2f});',
+        ]
+
+    lines += [
+        '  } catch (e) {',
+        f'    failedShapes.push({name} + ": " + e.toString());',
+        '  }',
+    ]
+    return '\n'.join(lines)
+
+
+def generate_ae_jsx(comp_name, width, height, shapes, warnings, source_filename):
+    width  = max(4, int(width))
+    height = max(4, int(height))
+    body = '\n\n'.join(jsx_shape_layer(s, i) for i, s in enumerate(shapes))
+    warn_lines = '\n'.join(f'// NOTE: {w}' for w in warnings)
+    comp_name_js = json.dumps(comp_name)
+
+    return f'''// Generated by EditOps — SVG to After Effects
+// Source: {source_filename}
+// Shapes converted: {len(shapes)}
+{warn_lines}
+//
+// Run this inside After Effects via File > Scripts > Run Script File...
+// It builds a composition from the SVG's flat-fill/stroke shapes and
+// prompts you to choose where to save the .aep project.
+
+(function() {{
+  app.beginUndoGroup("SVG to AE Import");
+
+  var comp = app.project.items.addComp({comp_name_js}, {width}, {height}, 1, 5, 30);
+  var failedShapes = [];
+
+{body}
+
+  app.endUndoGroup();
+
+  var msg = "Built \\"" + {comp_name_js} + "\\" with {len(shapes)} shape layer(s).";
+  if (failedShapes.length > 0) {{
+    msg += "\\n\\n" + failedShapes.length + " shape(s) failed:\\n" + failedShapes.join("\\n");
+  }}
+  alert(msg);
+
+  var saveFile = File.saveDialog("Save your After Effects project", "*.aep");
+  if (saveFile) {{
+    app.project.save(saveFile);
+    alert("Saved: " + saveFile.fsName);
+  }} else {{
+    alert("Project built but not saved — use File > Save As to save it later.");
+  }}
+}})();
+'''
+
+
+@app.route('/svg2aep', methods=['POST'])
+def svg2aep_route():
+    file = request.files.get('svg')
+    if not file:
+        return jsonify(error='No SVG file uploaded'), 400
+
+    try:
+        import svgelements  # noqa: F401
+    except ImportError:
+        return jsonify(error='Missing dependency: svgelements. Restart EditOps to pick up '
+                              'the update, or run: pip install -r requirements.txt'), 500
+
+    input_path, uid = save_upload(file, fallback_ext='.svg')
+
+    try:
+        width, height, shapes, warnings = parse_svg_for_ae(input_path)
+    except Exception as e:
+        os.remove(input_path)
+        return jsonify(error=f'Could not parse this SVG: {e}'), 400
+
+    cleanup_later(input_path)
+
+    if not shapes:
+        return jsonify(error='No supported shapes found in this SVG '
+                              '(flat fills/strokes only in this version).'), 400
+
+    comp_name = stem(file.filename)
+    jsx = generate_ae_jsx(comp_name, width, height, shapes, warnings, file.filename)
+
+    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.jsx')
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write(jsx)
+
+    cleanup_later(output_path)
+    resp = send_file(output_path, as_attachment=True,
+                     download_name=f'{comp_name}_import.jsx', mimetype='text/plain')
+    resp.headers['X-Shape-Count'] = str(len(shapes))
+    resp.headers['X-Warnings'] = urllib.parse.quote(json.dumps(warnings))
+    return resp
 
 
 @app.route('/feedback', methods=['POST'])
