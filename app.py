@@ -1503,6 +1503,32 @@ def qacheck_feedback_route():
     return jsonify(ok=True)
 
 
+@app.route('/qacheck/feedback/list')
+def qacheck_feedback_list_route():
+    try:
+        rows = supabase_request('GET', 'qa_word_feedback?select=*&order=created_at.desc')
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+    latest = {}
+    for row in rows or []:
+        if row['word'] not in latest:
+            latest[row['word']] = row
+    return jsonify(sorted(latest.values(), key=lambda r: r['word']))
+
+
+@app.route('/qacheck/feedback/delete', methods=['POST'])
+def qacheck_feedback_delete_route():
+    data = request.get_json(silent=True) or request.form
+    word = (data.get('word') or '').strip().lower()
+    if not word:
+        return jsonify(error='Missing word.'), 400
+    try:
+        supabase_request('DELETE', f'qa_word_feedback?word=eq.{urllib.parse.quote(word)}')
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+    return jsonify(ok=True)
+
+
 # ── Transcription ────────────────────────────────────────────────────────────
 
 def romanize_text(text):
