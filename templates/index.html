@@ -504,18 +504,6 @@
     .qa-learned-badge.not-mistake { background: #F0FAF3; color: var(--success); }
     .qa-learned-word { font-weight: 600; color: var(--text); flex-shrink: 0; }
     .qa-learned-context { color: var(--muted); font-size: 12px; flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .qa-learned-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
-    .qa-learned-actions button {
-      font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
-      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer; font-family: inherit;
-    }
-    .qa-learned-actions .qa-learned-delete-btn:hover { color: var(--error); border-color: var(--error); }
-    .qa-learned-confirm-input {
-      font-size: 12px; padding: 4px 8px; border: 1px solid var(--error); border-radius: 6px;
-      width: 96px; font-family: inherit;
-    }
-    .qa-learned-confirm-btn { border: none !important; background: var(--error) !important; color: #fff !important; }
-    .qa-learned-confirm-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
@@ -2183,20 +2171,18 @@ function qaSendFeedback(idx, verdict, reason) {
     });
 }
 
-// ── Spelling QA learned words (view / delete accumulated verdicts) ─────────
-let _qaLearnedWords = [];
-
+// ── Spelling QA learned words (view accumulated verdicts) ───────────────────
 function loadQALearnedWords() {
   const list = document.getElementById('qa-learned-list');
   fetch('/qacheck/feedback/list')
     .then(r => r.json())
     .then(words => {
-      _qaLearnedWords = Array.isArray(words) ? words : [];
-      if (!_qaLearnedWords.length) {
+      words = Array.isArray(words) ? words : [];
+      if (!words.length) {
         list.innerHTML = '<div class="fb-empty">No learned words yet.</div>';
         return;
       }
-      list.innerHTML = _qaLearnedWords.map((w, i) => {
+      list.innerHTML = words.map(w => {
         const badgeLabel = w.verdict === 'mistake'
           ? 'Real mistake'
           : 'Not a mistake' + (w.reason ? ' · ' + (QA_REASON_LABELS[w.reason] || w.reason) : '');
@@ -2205,45 +2191,10 @@ function loadQALearnedWords() {
           <span class="qa-learned-badge ${w.verdict === 'mistake' ? 'mistake' : 'not-mistake'}">${escapeHtml(badgeLabel)}</span>
           <span class="qa-learned-word">${escapeHtml(w.word)}</span>
           <span class="qa-learned-context">${escapeHtml(w.context || '')}</span>
-          <div class="qa-learned-actions" id="qa-learned-actions-${i}">
-            <button class="qa-learned-delete-btn" onclick="qaLearnedDeletePrompt(${i})">Delete</button>
-          </div>
         </div>`;
       }).join('');
     })
     .catch(() => { list.innerHTML = '<div class="fb-empty">Could not load learned words.</div>'; });
-}
-
-function qaLearnedDeletePrompt(i) {
-  const actions = document.getElementById(`qa-learned-actions-${i}`);
-  actions.innerHTML = `
-    <input type="text" class="qa-learned-confirm-input" id="qa-confirm-${i}" placeholder="Type DELETE">
-    <button class="qa-learned-confirm-btn" id="qa-confirm-btn-${i}" disabled onclick="qaLearnedDeleteConfirm(${i})">Confirm</button>
-    <button class="qa-learned-cancel-btn" onclick="loadQALearnedWords()">Cancel</button>`;
-  const input = document.getElementById(`qa-confirm-${i}`);
-  const btn   = document.getElementById(`qa-confirm-btn-${i}`);
-  input.addEventListener('input', () => { btn.disabled = input.value !== 'DELETE'; });
-  input.focus();
-}
-
-function qaLearnedDeleteConfirm(i) {
-  const word = _qaLearnedWords[i].word;
-  const actions = document.getElementById(`qa-learned-actions-${i}`);
-  actions.innerHTML = '<span class="qa-feedback-note">Deleting…</span>';
-  fetch('/qacheck/feedback/delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ word })
-  })
-    .then(r => r.json())
-    .then(data => {
-      if (data.error) {
-        actions.innerHTML = `<span class="qa-feedback-note">${escapeHtml(data.error)}</span>`;
-        return;
-      }
-      loadQALearnedWords();
-    })
-    .catch(() => { actions.innerHTML = '<span class="qa-feedback-note">Failed to delete.</span>'; });
 }
 
 function qaSeek(time) {
