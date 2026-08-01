@@ -462,6 +462,18 @@
     .tr-script-copy:hover { background: #333; }
     .tr-script-body { padding: 12px 14px; font-size: 13px; line-height: 1.75; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); user-select: text; }
 
+    /* ── Spelling QA flagged items ── */
+    .qa-list { max-height: 480px; overflow-y: auto; }
+    .qa-item { display: flex; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; }
+    .qa-item:last-child { border-bottom: none; }
+    .qa-item:hover { background: #F8F9FA; }
+    .qa-thumb { width: 200px; height: 90px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; cursor: pointer; background: #000; }
+    .qa-item-body { flex: 1; min-width: 0; }
+    .qa-item-word { font-weight: 700; color: var(--error); font-size: 14px; }
+    .qa-item-sugg { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+    .qa-item-ts { font-family: ui-monospace, 'SF Mono', monospace; color: var(--muted); font-size: 11px; margin-top: 5px; cursor: pointer; display: inline-block; }
+    .qa-item-ts:hover { color: var(--text); text-decoration: underline; }
+
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
     .merge-item {
@@ -546,6 +558,8 @@
     <button class="nav-item"        data-tab="svg2aep"    onclick="switchTab(this,'svg2aep')"><span class="ni">◆</span> SVG → After Effects</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
+    <div class="nav-section">Review</div>
+    <button class="nav-item"        data-tab="qacheck"    onclick="switchTab(this,'qacheck')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
     <button class="nav-item"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
     <div class="nav-section">Support</div>
@@ -844,6 +858,39 @@
       <div class="result-box" id="rb-transcribe"></div>
       <div id="tr-extra"></div>
       <div class="error-box"  id="eb-transcribe"></div>
+    </div>
+  </div>
+
+  <!-- ══ SPELLING QA ══ -->
+  <div id="panel-qacheck" class="panel">
+    <div class="page-header"><h1>Spelling QA</h1><p>Scan a video for spelling mistakes in on-screen graphics, titles, and lower thirds — text a script spellchecker can't see because it only exists as pixels.</p></div>
+    <div class="card">
+      <h2>Spelling QA</h2>
+      <p class="desc">Spelling QA</p>
+
+      <div class="dropzone" id="dz-qacheck" onclick="document.getElementById('f-qacheck').click()">
+        <div class="dz-icon">🔍</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-qacheck"></div>
+        <input type="file" id="f-qacheck" accept="video/*" style="display:none" onchange="onFile(this,'qacheck')">
+      </div>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        🔍 Samples frames throughout the video, reads on-screen text via OCR, then spellchecks it. English only for now.<br>
+        🖼️ OCR can misread stylized text — each flag shows a thumbnail so you can confirm at a glance instead of chasing false positives.<br>
+        📦 First run downloads the OCR model (cached after that).
+      </div>
+
+      <button class="submit-btn" onclick="submitQACheck()">Scan for Spelling Mistakes</button>
+      <div class="progress-wrap" id="pw-qacheck">
+        <div class="progress-meta"><span id="pl-qacheck">Uploading…</span><span id="pp-qacheck">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-qacheck"></div></div>
+      </div>
+      <div class="result-box" id="rb-qacheck"></div>
+      <div id="qa-extra"></div>
+      <div class="error-box"  id="eb-qacheck"></div>
     </div>
   </div>
 
@@ -1887,6 +1934,137 @@ function srtTimestamp(s) {
   const sec = Math.floor(s % 60);
   const ms  = Math.round((s % 1) * 1000);
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+}
+
+// ── Spelling QA ───────────────────────────────────────────────────────────
+function submitQACheck() {
+  const file = document.getElementById('f-qacheck').files[0];
+  if (!file) return alert('Please select a video first.');
+
+  resetUI('qacheck');
+  document.getElementById('qa-extra').innerHTML = '';
+
+  const form = new FormData();
+  form.append('video', file);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/qacheck');
+  xhr.responseType = 'json';
+
+  showProgress('qacheck', 0, 'Uploading…');
+
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 25);
+    showProgress('qacheck', pct, 'Uploading…');
+  };
+
+  xhr.upload.onload = () => {
+    showProgress('qacheck', 30, 'Extracting frames…');
+  };
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      const msg = (xhr.response && xhr.response.error) || 'Upload failed.';
+      showError('qacheck', msg);
+      return;
+    }
+    pollQACheck(xhr.response.task_id, Date.now());
+  };
+
+  xhr.onerror = () => showError('qacheck', 'Network error — is the server running?');
+
+  xhr.send(form);
+}
+
+function pollQACheck(taskId, startTime) {
+  const pf = document.getElementById('pf-qacheck');
+  const pp = document.getElementById('pp-qacheck');
+  const pl = document.getElementById('pl-qacheck');
+
+  const interval = setInterval(async () => {
+    if (!document.getElementById('pw-qacheck').classList.contains('visible')) {
+      clearInterval(interval);
+      return;
+    }
+
+    let data;
+    try {
+      const res = await fetch('/qacheck/status/' + taskId);
+      data = await res.json();
+    } catch {
+      clearInterval(interval);
+      showError('qacheck', 'Lost connection to server.');
+      return;
+    }
+
+    if (!data || data.status === 'processing') {
+      const elapsed = Math.min(Date.now() - startTime, 600000);
+      const pct = Math.round(30 + elapsed / 600000 * 65);
+      pl.textContent = (data && data.progress) ? data.progress : 'Scanning…';
+      pp.textContent = pct + '%';
+      pf.style.width = pct + '%';
+      return;
+    }
+
+    clearInterval(interval);
+
+    if (data.status === 'done') {
+      document.getElementById('pw-qacheck').classList.remove('visible');
+      renderQAResult(data);
+    } else {
+      showError('qacheck', data.error || 'Scan failed.');
+    }
+  }, 2000);
+}
+
+function renderQAResult(data) {
+  const rb        = document.getElementById('rb-qacheck');
+  const extra     = document.getElementById('qa-extra');
+  const fileInput = document.getElementById('f-qacheck');
+  const file      = fileInput.files[0];
+
+  let playerHtml = '';
+  if (file) {
+    playerHtml = `<div class="tr-player-wrap"><video id="qa-player" controls></video></div>`;
+  }
+
+  const count = data.issues.length;
+  rb.innerHTML = `
+    <div class="result-title">${count ? '⚠️ ' + count + ' possible spelling issue' + (count === 1 ? '' : 's') + ' found' : '✓ No spelling issues found'}</div>
+    ${playerHtml}
+    <div style="font-size:12px;color:var(--muted);">Scanned ${data.frames_scanned} sampled frame${data.frames_scanned === 1 ? '' : 's'} across ${fmtTranscriptTime(data.duration)}.</div>`;
+  rb.classList.add('visible');
+
+  if (file) {
+    document.getElementById('qa-player').src = URL.createObjectURL(file);
+  }
+
+  if (count) {
+    const items = data.issues.map(iss => `
+      <div class="qa-item">
+        <img class="qa-thumb" src="${iss.thumbnail}" onclick="qaSeek(${iss.start})" title="Click to jump to this moment">
+        <div class="qa-item-body">
+          <div class="qa-item-word">${escapeHtml(iss.word)}</div>
+          ${iss.suggestions.length ? `<div class="qa-item-sugg">→ ${iss.suggestions.map(escapeHtml).join(', ')}</div>` : ''}
+          <div class="qa-item-ts" onclick="qaSeek(${iss.start})">${fmtTranscriptTime(iss.start)}</div>
+        </div>
+      </div>`).join('');
+    extra.innerHTML = `
+      <div class="tr-panel">
+        <div class="tr-panel-header"><span>Flagged Words</span><span class="sp-badge">${count}</span></div>
+        <div class="qa-list">${items}</div>
+      </div>`;
+  } else {
+    extra.innerHTML = '';
+  }
+}
+
+function qaSeek(time) {
+  const player = document.getElementById('qa-player');
+  if (!player) return;
+  player.currentTime = time;
+  player.play();
 }
 </script>
 </body>

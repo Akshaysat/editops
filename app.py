@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil
 import urllib.request, urllib.error, urllib.parse
 
 _tasks = {}   # task_id → {status, progress, result, filename, error}
@@ -1115,6 +1115,196 @@ def ytdl_route():
 
     cleanup_later(output_path)
     return send_file(output_path, as_attachment=True, download_name=download_name)
+
+
+# ── On-Screen Spelling QA ───────────────────────────────────────────────────
+# Catches spelling mistakes burned into video pixels (lower thirds, titles,
+# graphics) — text that only exists as pixels, not as any extractable data,
+# so it has to go through OCR before it can be spellchecked at all.
+
+_ocr_reader = None
+_ocr_reader_lock = threading.Lock()
+
+
+def get_ocr_reader():
+    """Loads the EasyOCR model once and reuses it — model init is a couple
+    seconds, worth caching across requests rather than reloading every scan."""
+    global _ocr_reader
+    if _ocr_reader is None:
+        with _ocr_reader_lock:
+            if _ocr_reader is None:
+                import easyocr
+                _ocr_reader = easyocr.Reader(['en'], gpu=True, verbose=False)
+    return _ocr_reader
+
+
+def qa_sample_interval(duration, max_frames=90, min_interval=1.5):
+    """Fixed-interval frame sampling. Scene-change detection was tried first
+    but doesn't reliably catch this case: on-screen text over a similar
+    background (the common lower-third/title-card case) barely moves the
+    scene-change score even though the words are completely different —
+    tuning the threshold low enough to catch it also fires constantly on
+    ordinary camera motion in real footage. Fixed interval is simpler and
+    doesn't have that blind spot."""
+    if duration <= 0:
+        return min_interval
+    return max(min_interval, duration / max_frames)
+
+
+def qa_extract_frames(video_path, out_dir, interval):
+    """One ffmpeg pass, sampling at a fixed interval and downscaling to
+    bound OCR time on large source video. Returns [(timestamp, frame_path)]."""
+    pattern = os.path.join(out_dir, 'f%05d.jpg')
+    fps = 1.0 / interval
+    cmd = ['ffmpeg', '-y', '-i', video_path,
+           '-vf', f"fps={fps},scale='min(960,iw)':-2",
+           '-q:v', '4', pattern]
+    subprocess.run(cmd, capture_output=True)
+    frames = sorted(glob.glob(os.path.join(out_dir, 'f*.jpg')))
+    return [(i * interval, path) for i, path in enumerate(frames)]
+
+
+def qa_crop_thumbnail(frame_path, bbox, pad_frac=0.6, max_width=480):
+    """Crops the frame to the flagged word's region (with padding for visual
+    context) and returns it as a base64 JPEG data URI — OCR misreads are
+    common enough on stylized text that a bare word list isn't trustworthy
+    on its own; the reviewer needs to glance and confirm."""
+    from PIL import Image
+    import base64, io as pyio
+
+    img = Image.open(frame_path)
+    w_img, h_img = img.size
+    xs = [p[0] for p in bbox]
+    ys = [p[1] for p in bbox]
+    x0, x1 = float(min(xs)), float(max(xs))
+    y0, y1 = float(min(ys)), float(max(ys))
+    padx = (x1 - x0) * pad_frac
+    pady = (y1 - y0) * pad_frac + 10
+    cx0 = max(0, int(x0 - padx))
+    cx1 = min(w_img, int(x1 + padx))
+    cy0 = max(0, int(y0 - pady))
+    cy1 = min(h_img, int(y1 + pady))
+    crop = img.crop((cx0, cy0, cx1, cy1))
+    if crop.width > max_width:
+        ratio = max_width / crop.width
+        crop = crop.resize((max_width, max(1, int(crop.height * ratio))))
+
+    buf = pyio.BytesIO()
+    crop.convert('RGB').save(buf, format='JPEG', quality=80)
+    return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
+
+
+def qa_dedupe_issues(issues, window=5.0):
+    """Collapses the same flagged word appearing across several consecutive
+    sampled frames (a lower third held on screen for a few seconds gets
+    sampled multiple times) down to its first occurrence within a rolling
+    time window, so review isn't cluttered with near-duplicates."""
+    issues = sorted(issues, key=lambda i: i['start'])
+    kept = []
+    last_seen = {}
+    for iss in issues:
+        prev_t = last_seen.get(iss['word'])
+        if prev_t is not None and iss['start'] - prev_t < window:
+            continue
+        kept.append(iss)
+        last_seen[iss['word']] = iss['start']
+    return kept
+
+
+def qa_scan_frames(frames, progress_cb=None):
+    """Runs OCR on each sampled frame, spellchecks what comes back (reusing
+    check_spelling), and returns deduped issues with cropped thumbnails."""
+    reader = get_ocr_reader()
+    ocr_segments = []   # [{'text', 'start'}] — check_spelling's expected shape
+    frame_meta   = []   # parallel to ocr_segments: (frame_path, bbox)
+
+    for i, (ts, frame_path) in enumerate(frames):
+        if progress_cb:
+            progress_cb(i, len(frames))
+        for bbox, text, conf in reader.readtext(frame_path):
+            if conf < 0.4:
+                continue
+            ocr_segments.append({'text': text, 'start': ts})
+            frame_meta.append((frame_path, bbox))
+
+    raw_issues = check_spelling(ocr_segments)
+
+    issues = []
+    for iss in raw_issues:
+        frame_path, bbox = frame_meta[iss['seg_idx']]
+        issues.append({
+            'word':        iss['word'],
+            'suggestions': iss['suggestions'],
+            'start':       iss['start'],
+            'context':     ocr_segments[iss['seg_idx']]['text'],
+            'thumbnail':   qa_crop_thumbnail(frame_path, bbox),
+        })
+
+    return qa_dedupe_issues(issues)
+
+
+@app.route('/qacheck', methods=['POST'])
+def qacheck_route():
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No video uploaded'), 400
+
+    try:
+        import easyocr  # noqa: F401
+    except ImportError:
+        return jsonify(error='Missing dependency: easyocr. Restart EditOps to pick up '
+                              'the update, or run: pip install -r requirements.txt'), 500
+
+    input_path, uid = save_upload(file)
+    info = ffprobe_info(input_path)
+    if not info or not info['has_video']:
+        os.remove(input_path)
+        return jsonify(error='Cannot read video file.'), 400
+
+    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting frames…'}
+
+    def run():
+        frame_dir = os.path.join(TEMP_DIR, f'vt_qa_{uid}')
+        os.makedirs(frame_dir, exist_ok=True)
+        try:
+            interval = qa_sample_interval(info['duration'])
+            frames = qa_extract_frames(input_path, frame_dir, interval)
+            if not frames:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract frames from this video.'}
+                return
+
+            _tasks[uid]['progress'] = f'Scanning {len(frames)} frames… (first run downloads the OCR model)'
+
+            def progress(i, total):
+                _tasks[uid]['progress'] = f'Scanning frame {i + 1}/{total}…'
+
+            issues = qa_scan_frames(frames, progress)
+
+            _tasks[uid] = {
+                'status':         'done',
+                'issues':         issues,
+                'frames_scanned': len(frames),
+                'duration':       info['duration'],
+            }
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+        finally:
+            cleanup_later(input_path)
+            def cleanup_frame_dir():
+                time.sleep(90)
+                shutil.rmtree(frame_dir, ignore_errors=True)
+            threading.Thread(target=cleanup_frame_dir, daemon=True).start()
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/qacheck/status/<task_id>')
+def qacheck_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify(task)
 
 
 # ── Transcription ────────────────────────────────────────────────────────────
