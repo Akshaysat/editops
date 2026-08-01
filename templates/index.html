@@ -353,25 +353,39 @@
     }
     .error-box.visible { display: block; }
 
-    /* ── Transcript preview ── */
-    .tr-preview {
-      max-height: 320px;
-      overflow-y: auto;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin-top: 14px;
-      padding: 4px;
-      font-size: 13px;
+    /* ── Transcript display: shared panel chrome for Transcript / Spelling / Script ── */
+    .tr-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: #fff; }
+    .tr-panel-header {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px;
+      padding: 9px 14px;
       background: #FAFAFA;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
     }
+    .tr-panel-actions { display: flex; align-items: center; gap: 14px; font-weight: 500; }
+
+    .tr-preview { max-height: 340px; overflow-y: auto; }
     .tr-seg {
       display: flex;
       gap: 12px;
-      padding: 5px 8px;
-      border-radius: 5px;
-      line-height: 1.5;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      line-height: 1.55;
     }
-    .tr-seg:hover { background: rgba(0,0,0,0.03); }
+    .tr-seg:last-child { border-bottom: none; }
+    .tr-seg:hover { background: rgba(0,0,0,0.025); }
+    .tr-seg-issue { background: #FDF6F6; }
+    .tr-idx {
+      color: #CCCCCC;
+      font-family: ui-monospace, 'SF Mono', monospace;
+      font-size: 11px;
+      flex-shrink: 0;
+      padding-top: 2px;
+      min-width: 14px;
+      text-align: right;
+    }
     .tr-ts {
       color: #AAAAAA;
       font-family: ui-monospace, 'SF Mono', monospace;
@@ -379,7 +393,7 @@
       white-space: nowrap;
       flex-shrink: 0;
       padding-top: 2px;
-      min-width: 145px;
+      min-width: 128px;
       cursor: pointer;
     }
     .tr-ts:hover { color: var(--text); text-decoration: underline; }
@@ -402,6 +416,14 @@
       background: rgba(0,0,0,0.05) !important;
       box-shadow: inset 2.5px 0 0 var(--text);
     }
+    .tr-misspell {
+      background: #FBE0E0;
+      color: var(--error);
+      padding: 0 2px;
+      border-radius: 3px;
+      text-decoration: underline wavy var(--error);
+      text-underline-offset: 2px;
+    }
     .tr-player-wrap {
       margin-bottom: 16px;
       border-radius: 8px;
@@ -411,15 +433,7 @@
     }
     .tr-player-wrap video { width: 100%; max-height: 280px; display: block; }
     .tr-player-wrap audio { width: 100%; display: block; }
-    .tr-toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-top: 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .tr-hint { font-style: italic; }
+    .tr-hint { font-style: italic; color: var(--muted); font-size: 12px; }
     .tr-reset {
       background: none;
       border: none;
@@ -428,17 +442,15 @@
       font-size: 12px;
       padding: 0;
       text-decoration: underline;
+      font-family: inherit;
     }
     .tr-reset:hover { color: var(--text); }
-    .tr-seg-issue { border-left: 2px solid #E03131; }
 
     /* ── Spell-check panel ── */
-    .sp-panel { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-    .sp-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; background: #FAFAFA; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
     .sp-badge    { background: #E03131; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
     .sp-badge-ok { background: #1A8C3F; color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
     .sp-list { max-height: 180px; overflow-y: auto; }
-    .sp-item { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+    .sp-item { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
     .sp-item:last-child { border-bottom: none; }
     .sp-item:hover { background: #F8F9FA; }
     .sp-ts   { font-family: monospace; color: var(--muted); font-size: 11px; min-width: 46px; flex-shrink: 0; }
@@ -446,8 +458,6 @@
     .sp-sugg { color: var(--muted); font-size: 12px; }
 
     /* ── Full Script panel ── */
-    .tr-script { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
-    .tr-script-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 14px; background: #FAFAFA; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
     .tr-script-copy { background: var(--text); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
     .tr-script-copy:hover { background: #333; }
     .tr-script-body { padding: 12px 14px; font-size: 13px; line-height: 1.75; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); user-select: text; }
@@ -830,6 +840,7 @@
         <div class="progress-bar"><div class="progress-fill" id="pf-transcribe"></div></div>
       </div>
       <div class="result-box" id="rb-transcribe"></div>
+      <div id="tr-extra"></div>
       <div class="error-box"  id="eb-transcribe"></div>
     </div>
   </div>
@@ -1510,6 +1521,7 @@ function submitTranscribe() {
   const romanize = document.getElementById('tr-romanize').checked;
 
   resetUI('transcribe');
+  document.getElementById('tr-extra').innerHTML = '';
 
   const form = new FormData();
   form.append('file', file);
@@ -1613,10 +1625,31 @@ function escHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
+// Escapes text, then wraps any of `words` (case-insensitive, whole-word) in a
+// <mark> so misspellings are visible right where they occur, not just via a
+// separate list.
+function highlightMisspellings(text, words) {
+  const esc = escHtml(text);
+  if (!words || !words.size) return esc;
+  const alts = [...words].map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(`\\b(${alts})\\b`, 'gi');
+  return esc.replace(re, '<mark class="tr-misspell">$1</mark>');
+}
+
+function issueWordsBySegment() {
+  const map = {};
+  _trSpellIssues.forEach(iss => {
+    if (!map[iss.seg_idx]) map[iss.seg_idx] = new Set();
+    map[iss.seg_idx].add(iss.word);
+  });
+  return map;
+}
+
 function renderTranscriptResult(count) {
-  const rb       = document.getElementById('rb-transcribe');
+  const rb        = document.getElementById('rb-transcribe');
+  const extra     = document.getElementById('tr-extra');
   const fileInput = document.getElementById('f-transcribe');
-  const file     = fileInput.files[0];
+  const file      = fileInput.files[0];
 
   // Player
   let playerHtml = '';
@@ -1625,37 +1658,13 @@ function renderTranscriptResult(count) {
     playerHtml = `<div class="tr-player-wrap"><${tag} id="tr-player" controls></${tag}></div>`;
   }
 
-  // Segments
-  let previewHtml = '';
-  if (_trSegs.length > 0) {
-    const issueSegs = new Set(_trSpellIssues.map(iss => iss.seg_idx));
-    const rows = _trSegs.map((s, i) =>
-      `<div class="tr-seg${issueSegs.has(i) ? ' tr-seg-issue' : ''}" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
-      `<span class="tr-ts" onclick="trSeek(${s.start})" title="Click to jump here">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
-      `<span class="tr-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</span>` +
-      `</div>`
-    ).join('');
-    previewHtml =
-      `<div class="tr-preview" id="tr-preview">${rows}</div>` +
-      `<div class="tr-toolbar">` +
-      `<span class="tr-hint">✏️ Click any line to edit · Click timestamp to seek</span>` +
-      `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
-      `</div>` +
-      renderSpellPanel() +
-      `<div class="tr-script">` +
-      `<div class="tr-script-header"><span>Full Script</span><button class="tr-script-copy" onclick="copyScript(this)">Copy</button></div>` +
-      `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join(' '))}</div>` +
-      `</div>`;
-  }
-
+  // Compact success banner: title, player, download — kept in the green box
   rb.innerHTML = `
     <div class="result-title">✓ Transcription complete! (${count} segments)</div>
     ${playerHtml}
-    <button class="download-btn" onclick="downloadTranscript()" style="margin-bottom:14px">⬇ Download .srt file</button>
-    ${previewHtml}`;
+    <button class="download-btn" onclick="downloadTranscript()">⬇ Download .srt file</button>`;
   rb.classList.add('visible');
 
-  // Wire up player
   if (file) {
     const player  = document.getElementById('tr-player');
     const blobUrl = URL.createObjectURL(file);
@@ -1663,8 +1672,43 @@ function renderTranscriptResult(count) {
     player.addEventListener('timeupdate', () => updateTrHighlight(player.currentTime));
   }
 
+  // Transcript / spelling / script — rendered as plain panels below the
+  // success banner, not inside it, so a big editing workspace doesn't read
+  // as one giant green "success" blob.
+  let extraHtml = '';
+  if (_trSegs.length > 0) {
+    const issueWords = issueWordsBySegment();
+    const rows = _trSegs.map((s, i) => {
+      const words = issueWords[i];
+      return (
+        `<div class="tr-seg${words ? ' tr-seg-issue' : ''}" data-idx="${i}" data-start="${s.start}" data-end="${s.end}">` +
+        `<span class="tr-idx">${i + 1}</span>` +
+        `<span class="tr-ts" onclick="trSeek(${s.start})" title="Click to jump here">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
+        `<span class="tr-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${highlightMisspellings(s.text, words)}</span>` +
+        `</div>`
+      );
+    }).join('');
+
+    extraHtml =
+      `<div class="tr-panel">` +
+      `<div class="tr-panel-header">` +
+      `<span>Transcript · ${_trSegs.length} segments</span>` +
+      `<span class="tr-panel-actions">` +
+      `<span class="tr-hint">Click a line to edit · Click timestamp to seek</span>` +
+      `<button class="tr-reset" onclick="resetTranscript()">Reset to original</button>` +
+      `</span></div>` +
+      `<div class="tr-preview" id="tr-preview">${rows}</div>` +
+      `</div>` +
+      renderSpellPanel() +
+      `<div class="tr-panel">` +
+      `<div class="tr-panel-header"><span>Full Script</span><button class="tr-script-copy" onclick="copyScript(this)">Copy</button></div>` +
+      `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join(' '))}</div>` +
+      `</div>`;
+  }
+  extra.innerHTML = extraHtml;
+
   // Sync edits back to _trSegs on input and refresh script body
-  rb.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
+  extra.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
     el.addEventListener('input', () => {
       _trSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
       const sb = document.getElementById('tr-script-body');
@@ -1706,10 +1750,11 @@ function resetTranscript() {
   // Re-render preview only (keep result box visible)
   const preview = document.getElementById('tr-preview');
   if (!preview) return;
+  const issueWords = issueWordsBySegment();
   preview.querySelectorAll('.tr-txt[contenteditable]').forEach(el => {
     const idx = parseInt(el.dataset.idx, 10);
-    el.innerText = _trSegsOrig[idx].text;
     _trSegs[idx].text = _trSegsOrig[idx].text;
+    el.innerHTML = highlightMisspellings(_trSegsOrig[idx].text, issueWords[idx]);
   });
   const sb = document.getElementById('tr-script-body');
   if (sb) sb.textContent = _trSegs.map(s => s.text.trim()).join(' ');
@@ -1739,7 +1784,7 @@ function copyScript(btn) {
 
 function renderSpellPanel() {
   if (!_trSpellIssues.length) {
-    return `<div class="sp-panel"><div class="sp-header"><span>Spelling Check</span><span class="sp-badge-ok">✓ No issues</span></div></div>`;
+    return `<div class="tr-panel"><div class="tr-panel-header"><span>Spelling Check</span><span class="sp-badge-ok">✓ No issues</span></div></div>`;
   }
   const items = _trSpellIssues.map(iss =>
     `<div class="sp-item" onclick="spJump(${iss.seg_idx},${iss.start})">` +
@@ -1750,8 +1795,8 @@ function renderSpellPanel() {
       : '') +
     `</div>`
   ).join('');
-  return `<div class="sp-panel">` +
-    `<div class="sp-header"><span>Spelling Issues</span><span class="sp-badge">${_trSpellIssues.length}</span></div>` +
+  return `<div class="tr-panel">` +
+    `<div class="tr-panel-header"><span>Spelling Issues</span><span class="sp-badge">${_trSpellIssues.length}</span></div>` +
     `<div class="sp-list">${items}</div>` +
     `</div>`;
 }
