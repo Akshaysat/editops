@@ -1194,13 +1194,6 @@ def qa_crop_thumbnail(frame_path, bbox, pad_frac=0.6, max_width=480):
     return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
-# Bottom margin of the frame treated as "likely a burned-in subtitle" rather
-# than a graphic — captions are conventionally anchored to the bottom safe
-# margin, while lower-third graphics usually sit with more room above the
-# bottom edge. A heuristic, not a hard rule — revisit the fraction if it's
-# excluding real graphics or letting captions through.
-QA_SUBTITLE_BAND_FRAC = 0.15
-
 # Common Hinglish/Hindi words (romanized) that an English dictionary always
 # flags as misspelled — excluded so Hindi/Hinglish on-screen text doesn't
 # drown out genuine English typos. A starter list, not exhaustive; extend
@@ -1227,6 +1220,83 @@ HINGLISH_WORDS = frozenset({
 })
 
 
+def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
+    """Like check_spelling, but skips a whole line when most of its words
+    aren't recognized by the English dictionary — much more likely a
+    non-English (e.g. Hinglish) sentence than one riddled with typos, so
+    flagging individual words in it would mostly be noise. HINGLISH_WORDS
+    remains a second layer for isolated Hinglish words mixed into an
+    otherwise-English line, which the ratio check alone wouldn't catch.
+
+    The ratio only applies once there are enough checkable words to make it
+    a meaningful signal — a short title with two typos ("Wellcome to the
+    shwo") can easily hit a >50% unknown ratio on its own merits without
+    being remotely non-English, so lines below min_words_for_ratio always
+    fall back to flagging each unknown word individually."""
+    try:
+        from spellchecker import SpellChecker
+        import re
+        spell = SpellChecker()
+        issues = []
+        for i, seg in enumerate(segments):
+            words = re.findall(r"[A-Za-z']+", seg['text'])
+            to_check = [w.lower().strip("'") for w in words
+                        if len(w) > 2 and not w.isupper()]
+            if not to_check:
+                continue
+            unknown = spell.unknown(to_check)
+            if len(to_check) >= min_words_for_ratio and len(unknown) / len(to_check) > max_unknown_ratio:
+                continue
+            for word in unknown:
+                if word in HINGLISH_WORDS:
+                    continue
+                best = spell.correction(word)
+                others = sorted(spell.candidates(word) or set())
+                suggestions = ([best] if best and best != word else []) + \
+                              [c for c in others if c != word and c != best]
+                issues.append({
+                    'seg_idx':     i,
+                    'word':        word,
+                    'suggestions': suggestions[:3],
+                    'start':       seg['start'],
+                })
+        return issues
+    except Exception:
+        return []
+
+
+def qa_y_bucket(y_mid, frame_h):
+    """5%-of-frame-height buckets — coarse enough to absorb OCR bbox jitter
+    (a line with descenders like g/y reads a slightly taller box than one
+    without) while still being far more precise than a fixed percentage."""
+    return round(y_mid / frame_h * 20) / 20
+
+
+def qa_detect_subtitle_band(raw_results, total_frames, min_frac=0.35):
+    """Auto-detects this video's actual subtitle Y-position instead of
+    assuming a fixed percentage: subtitles are rendered by the same
+    template in the same spot every time they appear, so they cluster
+    tightly in the bottom half of frame across many sampled frames — a
+    one-off graphic won't recur at the same position anywhere near as
+    often. Returns the dominant bucket, or None if nothing clearly
+    dominates (in which case nothing gets excluded — safer to risk a
+    missed subtitle than to blindly exclude real graphic text)."""
+    buckets = {}
+    for _ts, _frame_path, bbox, _text, frame_h in raw_results:
+        y_mid = sum(p[1] for p in bbox) / len(bbox)
+        if y_mid < frame_h * 0.6:
+            continue
+        b = qa_y_bucket(y_mid, frame_h)
+        buckets[b] = buckets.get(b, 0) + 1
+
+    if not buckets:
+        return None
+    bucket, count = max(buckets.items(), key=lambda kv: kv[1])
+    if count / max(1, total_frames) < min_frac:
+        return None
+    return bucket
+
+
 def qa_dedupe_issues(issues, window=5.0):
     """Collapses the same flagged word appearing across several consecutive
     sampled frames (a lower third held on screen for a few seconds gets
@@ -1245,31 +1315,40 @@ def qa_dedupe_issues(issues, window=5.0):
 
 
 def qa_scan_frames(frames, progress_cb=None):
-    """Runs OCR on each sampled frame, spellchecks what comes back (reusing
-    check_spelling), and returns deduped issues with cropped thumbnails.
-    Skips text in the bottom subtitle band and Hinglish words (see
-    QA_SUBTITLE_BAND_FRAC / HINGLISH_WORDS above)."""
+    """Runs OCR on each sampled frame, auto-detects and excludes this
+    video's subtitle band, spellchecks what's left (skipping likely-
+    non-English lines — see qa_check_spelling), and returns deduped
+    issues with cropped thumbnails."""
     from PIL import Image
 
     reader = get_ocr_reader()
-    ocr_segments = []   # [{'text', 'start'}] — check_spelling's expected shape
-    frame_meta   = []   # parallel to ocr_segments: (frame_path, bbox)
 
+    # Pass 1: OCR every frame and keep all raw results — the subtitle band
+    # can't be identified until we've seen where text recurs across the
+    # whole video, so nothing gets excluded yet.
+    raw_results = []  # (ts, frame_path, bbox, text, frame_h)
     for i, (ts, frame_path) in enumerate(frames):
         if progress_cb:
             progress_cb(i, len(frames))
         frame_h = Image.open(frame_path).size[1]
-        subtitle_y = frame_h * (1 - QA_SUBTITLE_BAND_FRAC)
         for bbox, text, conf in reader.readtext(frame_path):
             if conf < 0.4:
                 continue
-            if min(p[1] for p in bbox) >= subtitle_y:
-                continue
-            ocr_segments.append({'text': text, 'start': ts})
-            frame_meta.append((frame_path, bbox))
+            raw_results.append((ts, frame_path, bbox, text, frame_h))
 
-    raw_issues = check_spelling(ocr_segments)
-    raw_issues = [iss for iss in raw_issues if iss['word'].lower() not in HINGLISH_WORDS]
+    subtitle_bucket = qa_detect_subtitle_band(raw_results, len(frames))
+
+    ocr_segments = []   # [{'text', 'start'}] — qa_check_spelling's expected shape
+    frame_meta   = []   # parallel to ocr_segments: (frame_path, bbox)
+    for ts, frame_path, bbox, text, frame_h in raw_results:
+        if subtitle_bucket is not None:
+            y_mid = sum(p[1] for p in bbox) / len(bbox)
+            if qa_y_bucket(y_mid, frame_h) == subtitle_bucket:
+                continue
+        ocr_segments.append({'text': text, 'start': ts})
+        frame_meta.append((frame_path, bbox))
+
+    raw_issues = qa_check_spelling(ocr_segments)
 
     issues = []
     for iss in raw_issues:
