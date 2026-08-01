@@ -2063,8 +2063,8 @@ function renderQAResult(data) {
 function qaSeek(time) {
   const player = document.getElementById('qa-player');
   if (!player) return;
+  player.pause();
   player.currentTime = time;
-  player.play();
 }
 </script>
 </body>
