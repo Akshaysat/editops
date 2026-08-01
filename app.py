@@ -1256,8 +1256,13 @@ def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
         # OCR frequently drops the period in domains ("service@tataamccom"
         # instead of "service@tataamc.com") — ordinary prose essentially
         # never contains "@", so its presence alone is a strong enough signal.
+        # "tatamutualfund" specifically: OCR frequently merges "www" and the
+        # domain into one run-on token with no dot at all ("wtatamutualfund
+        # comldeshkarenivvesh" instead of "www.tatamutualfund.com/..."),
+        # leaving no www./.com pattern left to match generically.
         url_pattern = re.compile(
-            r'https?://|www\.|@|\.(com|in|org|net|co)\b', re.IGNORECASE)
+            r'https?://|www\.|@|\.(com|in|org|net|co)\b|tatamutualfund',
+            re.IGNORECASE)
         issues = []
         for i, seg in enumerate(segments):
             if url_pattern.search(seg['text']):
