@@ -1194,6 +1194,39 @@ def qa_crop_thumbnail(frame_path, bbox, pad_frac=0.6, max_width=480):
     return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
+# Bottom margin of the frame treated as "likely a burned-in subtitle" rather
+# than a graphic — captions are conventionally anchored to the bottom safe
+# margin, while lower-third graphics usually sit with more room above the
+# bottom edge. A heuristic, not a hard rule — revisit the fraction if it's
+# excluding real graphics or letting captions through.
+QA_SUBTITLE_BAND_FRAC = 0.15
+
+# Common Hinglish/Hindi words (romanized) that an English dictionary always
+# flags as misspelled — excluded so Hindi/Hinglish on-screen text doesn't
+# drown out genuine English typos. A starter list, not exhaustive; extend
+# as real false positives turn up.
+HINGLISH_WORDS = frozenset({
+    'aap', 'aapka', 'aapke', 'aapki', 'aapko', 'hai', 'hain', 'ho', 'hoga',
+    'hogi', 'hote', 'hoti', 'hota', 'kar', 'karo', 'kare', 'karen', 'karein',
+    'karenge', 'kiya', 'kiye', 'kya', 'kaise', 'kab', 'kahan', 'kaun', 'kyun',
+    'kyu', 'kyunki', 'nahi', 'nahin', 'haan', 'han', 'ji', 'bhai', 'bhaiya',
+    'didi', 'yaar', 'dost', 'accha', 'achha', 'acha', 'theek', 'thik',
+    'matlab', 'bilkul', 'zaroor', 'zarur', 'jarur', 'dekho', 'dekhiye',
+    'dekhna', 'suniye', 'sunna', 'batao', 'bataiye', 'bataunga', 'chalo',
+    'chaliye', 'abhi', 'phir', 'fir', 'iske', 'uske', 'isme', 'usme',
+    'jaise', 'waise', 'aisa', 'waisa', 'kuch', 'kuchh', 'sabhi', 'sab',
+    'hum', 'humein', 'humara', 'humare', 'tumhara', 'tumhare', 'mera',
+    'mere', 'meri', 'tera', 'teri', 'uska', 'uski', 'unka', 'unki', 'wala',
+    'wali', 'wale', 'log', 'logo', 'logon', 'baat', 'cheez', 'chize',
+    'zindagi', 'duniya', 'paisa', 'paise', 'zaroori', 'jarurat', 'zarurat',
+    'namaste', 'shukriya', 'dhanyavad', 'aage', 'peeche', 'andar', 'bahar',
+    'upar', 'neeche', 'niche', 'idhar', 'udhar', 'yahan', 'wahan', 'bohot',
+    'bahut', 'thoda', 'zyada', 'jyada', 'zyaada', 'kam', 'aur', 'toh', 'bhi',
+    'mein', 'sahi', 'galat', 'ekdum', 'sasta', 'mehnga', 'mehenga', 'kaafi',
+    'kafi', 'pyaar', 'pyar', 'dil', 'insaan', 'samay', 'waqt',
+})
+
+
 def qa_dedupe_issues(issues, window=5.0):
     """Collapses the same flagged word appearing across several consecutive
     sampled frames (a lower third held on screen for a few seconds gets
@@ -1213,7 +1246,11 @@ def qa_dedupe_issues(issues, window=5.0):
 
 def qa_scan_frames(frames, progress_cb=None):
     """Runs OCR on each sampled frame, spellchecks what comes back (reusing
-    check_spelling), and returns deduped issues with cropped thumbnails."""
+    check_spelling), and returns deduped issues with cropped thumbnails.
+    Skips text in the bottom subtitle band and Hinglish words (see
+    QA_SUBTITLE_BAND_FRAC / HINGLISH_WORDS above)."""
+    from PIL import Image
+
     reader = get_ocr_reader()
     ocr_segments = []   # [{'text', 'start'}] — check_spelling's expected shape
     frame_meta   = []   # parallel to ocr_segments: (frame_path, bbox)
@@ -1221,13 +1258,18 @@ def qa_scan_frames(frames, progress_cb=None):
     for i, (ts, frame_path) in enumerate(frames):
         if progress_cb:
             progress_cb(i, len(frames))
+        frame_h = Image.open(frame_path).size[1]
+        subtitle_y = frame_h * (1 - QA_SUBTITLE_BAND_FRAC)
         for bbox, text, conf in reader.readtext(frame_path):
             if conf < 0.4:
+                continue
+            if min(p[1] for p in bbox) >= subtitle_y:
                 continue
             ocr_segments.append({'text': text, 'start': ts})
             frame_meta.append((frame_path, bbox))
 
     raw_issues = check_spelling(ocr_segments)
+    raw_issues = [iss for iss in raw_issues if iss['word'].lower() not in HINGLISH_WORDS]
 
     issues = []
     for iss in raw_issues:
