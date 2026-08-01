@@ -24,7 +24,8 @@ SUPABASE_ANON_KEY = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 
 def supabase_request(method, path, body=None):
-    """Call the Supabase REST (PostgREST) API for the `feedback` table."""
+    """Call the Supabase REST (PostgREST) API. `path` includes the table
+    name and any query string, e.g. 'feedback' or 'qa_word_feedback?...'."""
     req = urllib.request.Request(
         f'{SUPABASE_URL}/rest/v1/{path}',
         data=json.dumps(body).encode() if body is not None else None,
@@ -1235,13 +1236,36 @@ FINANCE_JARGON_WORDS = frozenset({
 })
 
 
-def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
+def qa_get_dismissed_words():
+    """Fetches the team's accumulated verdicts from Supabase and returns the
+    set of words currently marked "not a mistake" — the most recent verdict
+    per word wins, so a word that was dismissed and later re-confirmed as a
+    real mistake stops being suppressed. Returns an empty set on any error
+    (network down, table missing) rather than failing the whole scan."""
+    try:
+        rows = supabase_request('GET', 'qa_word_feedback?select=word,verdict,created_at&order=created_at.desc')
+    except Exception:
+        return set()
+    if not rows:
+        return set()
+    latest = {}
+    for row in rows:
+        word = row['word']
+        if word not in latest:
+            latest[word] = row['verdict']
+    return {w for w, v in latest.items() if v == 'not_mistake'}
+
+
+def qa_check_spelling(segments, dismissed_words=frozenset(), max_unknown_ratio=0.5, min_words_for_ratio=4):
     """Like check_spelling, but skips a whole line when most of its words
     aren't recognized by the English dictionary — much more likely a
     non-English (e.g. Hinglish) sentence than one riddled with typos, so
     flagging individual words in it would mostly be noise. HINGLISH_WORDS
     remains a second layer for isolated Hinglish words mixed into an
     otherwise-English line, which the ratio check alone wouldn't catch.
+    dismissed_words is the team's own accumulated "not a mistake" verdicts
+    from qa_get_dismissed_words — the same idea as HINGLISH_WORDS, except
+    it grows itself from real usage instead of being hand-curated.
 
     The ratio only applies once there are enough checkable words to make it
     a meaningful signal — a short title with two typos ("Wellcome to the
@@ -1276,7 +1300,7 @@ def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
             if len(to_check) >= min_words_for_ratio and len(unknown) / len(to_check) > max_unknown_ratio:
                 continue
             for word in unknown:
-                if word in HINGLISH_WORDS or word in FINANCE_JARGON_WORDS:
+                if word in HINGLISH_WORDS or word in FINANCE_JARGON_WORDS or word in dismissed_words:
                     continue
                 best = spell.correction(word)
                 others = sorted(spell.candidates(word) or set())
@@ -1376,7 +1400,8 @@ def qa_scan_frames(frames, progress_cb=None):
         ocr_segments.append({'text': text, 'start': ts})
         frame_meta.append((frame_path, bbox))
 
-    raw_issues = qa_check_spelling(ocr_segments)
+    dismissed_words = qa_get_dismissed_words()
+    raw_issues = qa_check_spelling(ocr_segments, dismissed_words)
 
     issues = []
     for iss in raw_issues:
@@ -1454,6 +1479,28 @@ def qacheck_status(task_id):
     if not task:
         return jsonify(error='Task not found'), 404
     return jsonify(task)
+
+
+@app.route('/qacheck/feedback', methods=['POST'])
+def qacheck_feedback_route():
+    data = request.get_json(silent=True) or request.form
+    word    = (data.get('word') or '').strip().lower()
+    verdict = (data.get('verdict') or '').strip()
+    context    = (data.get('context') or '').strip()
+    video_name = (data.get('video_name') or '').strip()
+
+    if not word:
+        return jsonify(error='Missing word.'), 400
+    if verdict not in ('mistake', 'not_mistake'):
+        return jsonify(error='Invalid verdict.'), 400
+
+    try:
+        supabase_request('POST', 'qa_word_feedback', {
+            'word': word, 'verdict': verdict, 'context': context, 'video_name': video_name,
+        })
+    except Exception:
+        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+    return jsonify(ok=True)
 
 
 # ── Transcription ────────────────────────────────────────────────────────────

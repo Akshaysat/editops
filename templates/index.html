@@ -473,6 +473,17 @@
     .qa-item-sugg { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
     .qa-item-ts { font-family: ui-monospace, 'SF Mono', monospace; color: var(--muted); font-size: 11px; margin-top: 5px; cursor: pointer; display: inline-block; }
     .qa-item-ts:hover { color: var(--text); text-decoration: underline; }
+    .qa-item.qa-dismissed { opacity: 0.4; }
+    .qa-feedback { display: flex; gap: 8px; margin-top: 8px; }
+    .qa-feedback button {
+      font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .qa-feedback button:hover { color: var(--text); border-color: var(--text); }
+    .qa-feedback .qa-fb-mistake:hover { color: var(--error); border-color: var(--error); }
+    .qa-feedback .qa-fb-not-mistake:hover { color: var(--success); border-color: var(--success); }
+    .qa-feedback-note { font-size: 11.5px; color: var(--muted); margin-top: 8px; font-style: italic; }
 
     /* ── Merge file list ── */
     .merge-list { margin-bottom: 16px; }
@@ -2040,14 +2051,21 @@ function renderQAResult(data) {
     document.getElementById('qa-player').src = URL.createObjectURL(file);
   }
 
+  _qaIssues = data.issues;
+  _qaVideoName = file ? file.name : '';
+
   if (count) {
-    const items = data.issues.map(iss => `
-      <div class="qa-item">
+    const items = data.issues.map((iss, i) => `
+      <div class="qa-item" id="qa-item-${i}">
         <img class="qa-thumb" src="${iss.thumbnail}" onclick="qaSeek(${iss.start})" title="Click to jump to this moment">
         <div class="qa-item-body">
           <div class="qa-item-word">${escapeHtml(iss.word)}</div>
           ${iss.suggestions.length ? `<div class="qa-item-sugg">→ ${iss.suggestions.map(escapeHtml).join(', ')}</div>` : ''}
           <div class="qa-item-ts" onclick="qaSeek(${iss.start})">${fmtTranscriptTime(iss.start)}</div>
+          <div class="qa-feedback" id="qa-fb-${i}">
+            <button class="qa-fb-mistake" onclick="qaSubmitFeedback(${i},'mistake')">✓ Real mistake</button>
+            <button class="qa-fb-not-mistake" onclick="qaSubmitFeedback(${i},'not_mistake')">✗ Not a mistake</button>
+          </div>
         </div>
       </div>`).join('');
     extra.innerHTML = `
@@ -2058,6 +2076,40 @@ function renderQAResult(data) {
   } else {
     extra.innerHTML = '';
   }
+}
+
+// ── Spelling QA feedback (teaches the tool which flags are real) ───────────
+let _qaIssues = [];
+let _qaVideoName = '';
+
+function qaSubmitFeedback(idx, verdict) {
+  const iss = _qaIssues[idx];
+  const fb  = document.getElementById(`qa-fb-${idx}`);
+  fb.innerHTML = '<span class="qa-feedback-note">Saving…</span>';
+
+  fetch('/qacheck/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      word: iss.word, verdict, context: iss.context, video_name: _qaVideoName,
+    })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        fb.innerHTML = `<span class="qa-feedback-note">${escapeHtml(data.error)}</span>`;
+        return;
+      }
+      if (verdict === 'not_mistake') {
+        fb.innerHTML = '<span class="qa-feedback-note">✗ Marked as not a mistake — won\'t be flagged again</span>';
+        document.getElementById(`qa-item-${idx}`).classList.add('qa-dismissed');
+      } else {
+        fb.innerHTML = '<span class="qa-feedback-note">✓ Marked as a real mistake</span>';
+      }
+    })
+    .catch(() => {
+      fb.innerHTML = '<span class="qa-feedback-note">Failed to save — is the server running?</span>';
+    });
 }
 
 function qaSeek(time) {
