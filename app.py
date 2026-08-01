@@ -667,24 +667,120 @@ def svg_color(c):
             'opacity': c.opacity if c.opacity is not None else 1.0}
 
 
-def parse_svg_for_ae(svg_path):
-    """Returns (width, height, shapes, warnings). Flat fills/strokes only —
-    gradients, patterns, filters, images and text aren't supported yet."""
+def _parse_frac(s, default=0.0):
+    """Parses an SVG length that may be a percentage ('50%') or plain number."""
+    if s is None:
+        return default
+    s = s.strip()
+    if s.endswith('%'):
+        return float(s[:-1]) / 100.0
+    return float(s)
+
+
+def parse_svg_gradients(svg_path):
+    """Returns {id: gradient-def} parsed from the raw SVG XML. svgelements
+    collapses gradient fills to a flat fallback color and exposes no stop
+    data, so gradient stops/geometry have to come from a separate raw pass.
+
+    Only objectBoundingBox gradients without a gradientTransform are marked
+    'supported' — userSpaceOnUse would need the shape's cumulative transform
+    (which svgelements doesn't expose after resolving geometry), so those
+    fall back to a flat color rather than risk placing the ramp wrong."""
+    import xml.etree.ElementTree as ET
+    from svgelements import Color
+
+    NS = '{http://www.w3.org/2000/svg}'
+    XLINK = '{http://www.w3.org/1999/xlink}href'
+    root = ET.parse(svg_path).getroot()
+
+    defs = {}
+    for el in root.iter():
+        tag = el.tag.replace(NS, '')
+        if tag in ('linearGradient', 'radialGradient'):
+            defs[el.get('id')] = (tag, el)
+
+    def stop_color(stop_el):
+        style = {}
+        for part in stop_el.get('style', '').split(';'):
+            if ':' in part:
+                k, v = part.split(':', 1)
+                style[k.strip()] = v.strip()
+        color_str   = style.get('stop-color')   or stop_el.get('stop-color', '#000000')
+        opacity_str = style.get('stop-opacity') or stop_el.get('stop-opacity', '1')
+        try:
+            c = Color(color_str)
+            rgb = (c.red / 255.0, c.green / 255.0, c.blue / 255.0)
+        except Exception:
+            rgb = (0.0, 0.0, 0.0)
+        try:
+            opacity = float(opacity_str)
+        except ValueError:
+            opacity = 1.0
+        return rgb, opacity
+
+    def resolve(gid, seen):
+        if gid in seen or gid not in defs:
+            return None
+        seen.add(gid)
+        tag, el = defs[gid]
+
+        stops = [
+            (_parse_frac(stop.get('offset'), 0.0), *stop_color(stop))
+            for stop in el if stop.tag.replace(NS, '') == 'stop'
+        ]
+        href = el.get('href') or el.get(XLINK)
+        if not stops and href:
+            parent = resolve(href.lstrip('#'), seen)
+            if parent:
+                stops = parent['stops']
+        if not stops:
+            return None
+
+        units = el.get('gradientUnits', 'objectBoundingBox')
+        supported = units == 'objectBoundingBox' and not el.get('gradientTransform')
+
+        if tag == 'linearGradient':
+            coords = {'x1': _parse_frac(el.get('x1'), 0.0), 'y1': _parse_frac(el.get('y1'), 0.0),
+                      'x2': _parse_frac(el.get('x2'), 1.0), 'y2': _parse_frac(el.get('y2'), 0.0)}
+            gtype = 'linear'
+        else:
+            coords = {'cx': _parse_frac(el.get('cx'), 0.5), 'cy': _parse_frac(el.get('cy'), 0.5),
+                      'r':  _parse_frac(el.get('r'), 0.5)}
+            gtype = 'radial'
+
+        return {'type': gtype, 'stops': stops, 'coords': coords, 'supported': supported}
+
+    return {gid: resolve(gid, set()) for gid in defs}
+
+
+def shape_gradient_ref(el, gradients, attr):
+    """Looks up the raw (pre-resolution) fill/stroke attribute for a
+    url(#id) reference — el.fill/el.stroke would already be a flat fallback
+    color by this point, so the raw string is read from el.values instead.
+    Returns (gradient-def-or-None, had_url_ref) so callers can tell "no
+    reference at all" apart from "referenced something we can't use
+    (pattern, unresolvable gradient)" — both fall back to a flat color, but
+    only the latter should warn."""
     import re
+    raw_val = (getattr(el, 'values', None) or {}).get(attr, '')
+    m = re.match(r'url\(#([^)]+)\)', raw_val.strip()) if raw_val else None
+    if not m:
+        return None, False
+    return gradients.get(m.group(1)), True
+
+
+def parse_svg_for_ae(svg_path):
+    """Returns (width, height, shapes, warnings). Flat fills/strokes plus
+    linear/radial gradients (objectBoundingBox only) — patterns, filters,
+    images and text aren't supported yet."""
     from svgelements import SVG, Shape
 
     warnings = []
     svg = SVG.parse(svg_path)
     width  = int(round(svg.width or 500))
     height = int(round(svg.height or 500))
-
-    with open(svg_path, 'r', encoding='utf-8', errors='ignore') as f:
-        raw = f.read()
-    gradient_count = (len(re.findall(r'(?:fill|stroke)\s*=\s*["\']url\(#', raw))
-                       + raw.count('fill:url(#') + raw.count('stroke:url(#'))
-    if gradient_count:
-        warnings.append(f'{gradient_count} shape(s) use gradients or patterns — '
-                         f'not supported yet, flat colors were used instead.')
+    gradients = parse_svg_gradients(svg_path)
+    unsupported_gradients = 0
 
     skipped_text = 0
     shapes = []
@@ -698,14 +794,29 @@ def parse_svg_for_ae(svg_path):
             continue
         opacity = getattr(el, 'opacity', None)
         opacity = opacity if isinstance(opacity, (int, float)) else 1.0
+
+        fill_grad,   fill_had_ref   = shape_gradient_ref(el, gradients, 'fill')
+        stroke_grad, stroke_had_ref = shape_gradient_ref(el, gradients, 'stroke')
+        for g, had_ref in ((fill_grad, fill_had_ref), (stroke_grad, stroke_had_ref)):
+            if had_ref and (g is None or not g['supported']):
+                unsupported_gradients += 1
+
         shapes.append({
-            'name':         getattr(el, 'id', None) or f'Shape {len(shapes) + 1}',
-            'subpaths':     subpaths,
-            'fill':         svg_color(el.fill),
-            'stroke':       svg_color(el.stroke),
-            'stroke_width': float(el.stroke_width or 1.0),
-            'opacity':      opacity,
+            'name':          getattr(el, 'id', None) or f'Shape {len(shapes) + 1}',
+            'subpaths':      subpaths,
+            'bbox':          el.bbox(),
+            'fill':          None if (fill_grad and fill_grad['supported']) else svg_color(el.fill),
+            'stroke':        None if (stroke_grad and stroke_grad['supported']) else svg_color(el.stroke),
+            'fill_gradient':   fill_grad   if (fill_grad   and fill_grad['supported'])   else None,
+            'stroke_gradient': stroke_grad if (stroke_grad and stroke_grad['supported']) else None,
+            'stroke_width':  float(el.stroke_width or 1.0),
+            'opacity':       opacity,
         })
+
+    if unsupported_gradients:
+        warnings.append(f'{unsupported_gradients} shape(s) use gradients with an unsupported '
+                         f'coordinate system (userSpaceOnUse/gradientTransform) or patterns — '
+                         f'flat colors were used instead.')
 
     if skipped_text:
         warnings.append(f"{skipped_text} text element(s) skipped — text isn't "
@@ -714,12 +825,52 @@ def parse_svg_for_ae(svg_path):
     return width, height, shapes, warnings
 
 
-def jsx_shape_layer(shape, idx):
+def jsx_gradient_ramp(var, grad, bbox, opacity_mult):
+    """Emits the AE gradient geometry + color-ramp calls for a fill or
+    stroke's "ADBE Vector Graphic - G-Fill"/"G-Stroke" property. Radial
+    radius uses the (width+height)/2 approximation for objectBoundingBox
+    scaling rather than the exact SVG diagonal-normalization formula — a
+    known simplification, close enough for typical near-square shapes."""
+    minx, miny, maxx, maxy = bbox
+    w, h = maxx - minx, maxy - miny
+    c = grad['coords']
+
+    if grad['type'] == 'linear':
+        sx, sy = minx + c['x1'] * w, miny + c['y1'] * h
+        ex, ey = minx + c['x2'] * w, miny + c['y2'] * h
+        grad_type = 1
+    else:
+        sx, sy = minx + c['cx'] * w, miny + c['cy'] * h
+        r_abs = c['r'] * (w + h) / 2.0
+        ex, ey = sx + r_abs, sy
+        grad_type = 2
+
+    colors_flat, opacities_flat = [], []
+    for offset, (r, g, b), stop_op in grad['stops']:
+        colors_flat    += [offset, round(r, 4), round(g, 4), round(b, 4)]
+        opacities_flat += [offset, round(stop_op * opacity_mult, 4)]
+
+    return [
+        f'    {var}.property("ADBE Vector Grad Type").setValue({grad_type});',
+        f'    {var}.property("ADBE Vector Grad Start Pt").setValue([{sx:.3f}, {sy:.3f}]);',
+        f'    {var}.property("ADBE Vector Grad End Pt").setValue([{ex:.3f}, {ey:.3f}]);',
+        f'    var {var}Val = {var}.property("ADBE Vector Grad Colors").value;',
+        f'    {var}Val.colors.colors = {json.dumps(colors_flat)};',
+        f'    {var}Val.colors.opacities = {json.dumps(opacities_flat)};',
+        f'    {var}.property("ADBE Vector Grad Colors").setValue({var}Val);',
+    ]
+
+
+def jsx_shape_layer(shape, idx, enable_3d=False):
     name = json.dumps(shape['name'])
     lines = [
         '  try {',
         f'    var layer{idx} = comp.layers.addShape();',
         f'    layer{idx}.name = {name};',
+    ]
+    if enable_3d:
+        lines.append(f'    layer{idx}.threeDLayer = true;')
+    lines += [
         f'    var contents{idx} = layer{idx}.property("ADBE Root Vectors Group");',
         f'    var group{idx} = contents{idx}.addProperty("ADBE Vector Group");',
         f'    group{idx}.name = {name};',
@@ -737,7 +888,11 @@ def jsx_shape_layer(shape, idx):
             f'    pathProp{idx}_{si}.property("ADBE Vector Shape").setValue(shapeVal{idx}_{si});',
         ]
 
-    if shape['fill']:
+    if shape.get('fill_gradient'):
+        var = f'fill{idx}'
+        lines.append(f'    var {var} = groupContents{idx}.addProperty("ADBE Vector Graphic - G-Fill");')
+        lines += jsx_gradient_ramp(var, shape['fill_gradient'], shape['bbox'], shape['opacity'])
+    elif shape['fill']:
         r, g, b = shape['fill']['rgb']
         op = shape['fill']['opacity'] * shape['opacity'] * 100
         lines += [
@@ -746,7 +901,12 @@ def jsx_shape_layer(shape, idx):
             f'    fill{idx}.property("ADBE Vector Fill Opacity").setValue({op:.2f});',
         ]
 
-    if shape['stroke']:
+    if shape.get('stroke_gradient'):
+        var = f'stroke{idx}'
+        lines.append(f'    var {var} = groupContents{idx}.addProperty("ADBE Vector Graphic - G-Stroke");')
+        lines.append(f'    {var}.property("ADBE Vector Stroke Width").setValue({shape["stroke_width"]:.3f});')
+        lines += jsx_gradient_ramp(var, shape['stroke_gradient'], shape['bbox'], shape['opacity'])
+    elif shape['stroke']:
         r, g, b = shape['stroke']['rgb']
         op = shape['stroke']['opacity'] * shape['opacity'] * 100
         lines += [
@@ -764,10 +924,10 @@ def jsx_shape_layer(shape, idx):
     return '\n'.join(lines)
 
 
-def generate_ae_jsx(comp_name, width, height, shapes, warnings, source_filename):
+def generate_ae_jsx(comp_name, width, height, shapes, warnings, source_filename, enable_3d=False):
     width  = max(4, int(width))
     height = max(4, int(height))
-    body = '\n\n'.join(jsx_shape_layer(s, i) for i, s in enumerate(shapes))
+    body = '\n\n'.join(jsx_shape_layer(s, i, enable_3d) for i, s in enumerate(shapes))
     warn_lines = '\n'.join(f'// NOTE: {w}' for w in warnings)
     comp_name_js = json.dumps(comp_name)
 
@@ -833,8 +993,9 @@ def svg2aep_route():
         return jsonify(error='No supported shapes found in this SVG '
                               '(flat fills/strokes only in this version).'), 400
 
+    enable_3d = request.form.get('enable3d') == '1'
     comp_name = stem(file.filename)
-    jsx = generate_ae_jsx(comp_name, width, height, shapes, warnings, file.filename)
+    jsx = generate_ae_jsx(comp_name, width, height, shapes, warnings, file.filename, enable_3d)
 
     output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.jsx')
     with open(output_path, 'w', encoding='utf-8') as f:

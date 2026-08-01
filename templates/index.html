@@ -976,8 +976,13 @@
         <input type="file" id="f-svg2aep" accept=".svg,image/svg+xml" style="display:none" onchange="onFile(this,'svg2aep')">
       </div>
 
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:18px;cursor:pointer;user-select:none;">
+        <input type="checkbox" id="svg-3d" style="width:15px;height:15px;accent-color:var(--text);cursor:pointer;">
+        <span style="font-size:14px;">Enable 3D layers <span style="color:var(--muted);font-size:12px;">(lets you position/rotate/animate shapes in 3D space in AE)</span></span>
+      </label>
+
       <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
-        📐 v1 supports flat fills and strokes only — gradients, patterns, filters, images, and text aren't converted yet.<br>
+        📐 Supports flat fills/strokes and linear/radial gradients — patterns, filters, images, and text aren't converted yet.<br>
         🎬 This generates a <b>.jsx script</b>, not a finished .aep. Requires After Effects to run it: <b>File → Scripts → Run Script File…</b>
       </div>
 
@@ -1429,6 +1434,7 @@ function submit(tab, isPreview = false) {
     const file = document.getElementById('f-svg2aep').files[0];
     if (!file) return alert('Please select an SVG file first.');
     form.append('svg', file);
+    if (document.getElementById('svg-3d').checked) form.append('enable3d', '1');
   }
 
   resetUI(tab);
