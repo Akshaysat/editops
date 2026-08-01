@@ -1481,11 +1481,15 @@ def qacheck_status(task_id):
     return jsonify(task)
 
 
+QA_DISMISS_REASONS = ('ocr_misread', 'animation', 'not_english', 'other')
+
+
 @app.route('/qacheck/feedback', methods=['POST'])
 def qacheck_feedback_route():
     data = request.get_json(silent=True) or request.form
     word    = (data.get('word') or '').strip().lower()
     verdict = (data.get('verdict') or '').strip()
+    reason     = (data.get('reason') or '').strip()
     context    = (data.get('context') or '').strip()
     video_name = (data.get('video_name') or '').strip()
 
@@ -1493,10 +1497,13 @@ def qacheck_feedback_route():
         return jsonify(error='Missing word.'), 400
     if verdict not in ('mistake', 'not_mistake'):
         return jsonify(error='Invalid verdict.'), 400
+    if reason and reason not in QA_DISMISS_REASONS:
+        return jsonify(error='Invalid reason.'), 400
 
     try:
         supabase_request('POST', 'qa_word_feedback', {
-            'word': word, 'verdict': verdict, 'context': context, 'video_name': video_name,
+            'word': word, 'verdict': verdict, 'reason': reason or None,
+            'context': context, 'video_name': video_name,
         })
     except Exception:
         return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502

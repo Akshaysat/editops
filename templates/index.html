@@ -484,6 +484,16 @@
     .qa-feedback .qa-fb-mistake:hover { color: var(--error); border-color: var(--error); }
     .qa-feedback .qa-fb-not-mistake:hover { color: var(--success); border-color: var(--success); }
     .qa-feedback-note { font-size: 11.5px; color: var(--muted); margin-top: 8px; font-style: italic; }
+    .qa-reason-prompt { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+    .qa-reason-label { font-size: 11.5px; color: var(--muted); }
+    .qa-reason-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+    .qa-reason-btns button {
+      font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 6px;
+      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer; font-family: inherit;
+    }
+    .qa-reason-btns button:hover { color: var(--success); border-color: var(--success); }
+    .qa-reason-back { align-self: flex-start; font-size: 11px; color: var(--muted); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; font-family: inherit; }
+    .qa-reason-back:hover { color: var(--text); }
 
     /* ── Spelling QA learned words ── */
     .qa-learned-list { max-height: 340px; overflow-y: auto; }
@@ -2111,7 +2121,38 @@ function renderQAResult(data) {
 let _qaIssues = [];
 let _qaVideoName = '';
 
+const QA_REASON_LABELS = {
+  ocr_misread: 'OCR misread', animation: 'Mid-animation', not_english: 'Not English', other: 'Other',
+};
+
 function qaSubmitFeedback(idx, verdict) {
+  if (verdict === 'not_mistake') {
+    qaShowReasonPicker(idx);
+    return;
+  }
+  qaSendFeedback(idx, 'mistake', null);
+}
+
+function qaShowReasonPicker(idx) {
+  const fb = document.getElementById(`qa-fb-${idx}`);
+  const btns = Object.entries(QA_REASON_LABELS)
+    .map(([key, label]) => `<button onclick="qaSendFeedback(${idx},'not_mistake','${key}')">${label}</button>`)
+    .join('');
+  fb.innerHTML = `
+    <div class="qa-reason-prompt">
+      <span class="qa-reason-label">Why isn't it a mistake?</span>
+      <div class="qa-reason-btns">${btns}</div>
+      <button class="qa-reason-back" onclick="qaResetFeedbackButtons(${idx})">← Back</button>
+    </div>`;
+}
+
+function qaResetFeedbackButtons(idx) {
+  document.getElementById(`qa-fb-${idx}`).innerHTML = `
+    <button class="qa-fb-mistake" onclick="qaSubmitFeedback(${idx},'mistake')">✓ Real mistake</button>
+    <button class="qa-fb-not-mistake" onclick="qaSubmitFeedback(${idx},'not_mistake')">✗ Not a mistake</button>`;
+}
+
+function qaSendFeedback(idx, verdict, reason) {
   const iss = _qaIssues[idx];
   const fb  = document.getElementById(`qa-fb-${idx}`);
   fb.innerHTML = '<span class="qa-feedback-note">Saving…</span>';
@@ -2120,7 +2161,7 @@ function qaSubmitFeedback(idx, verdict) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      word: iss.word, verdict, context: iss.context, video_name: _qaVideoName,
+      word: iss.word, verdict, reason, context: iss.context, video_name: _qaVideoName,
     })
   })
     .then(r => r.json())
@@ -2130,7 +2171,8 @@ function qaSubmitFeedback(idx, verdict) {
         return;
       }
       if (verdict === 'not_mistake') {
-        fb.innerHTML = '<span class="qa-feedback-note">✗ Marked as not a mistake — won\'t be flagged again</span>';
+        const label = QA_REASON_LABELS[reason] || 'not a mistake';
+        fb.innerHTML = `<span class="qa-feedback-note">✗ Marked as not a mistake (${escapeHtml(label)}) — won't be flagged again</span>`;
         document.getElementById(`qa-item-${idx}`).classList.add('qa-dismissed');
       } else {
         fb.innerHTML = '<span class="qa-feedback-note">✓ Marked as a real mistake</span>';
@@ -2154,15 +2196,20 @@ function loadQALearnedWords() {
         list.innerHTML = '<div class="fb-empty">No learned words yet.</div>';
         return;
       }
-      list.innerHTML = _qaLearnedWords.map((w, i) => `
+      list.innerHTML = _qaLearnedWords.map((w, i) => {
+        const badgeLabel = w.verdict === 'mistake'
+          ? 'Real mistake'
+          : 'Not a mistake' + (w.reason ? ' · ' + (QA_REASON_LABELS[w.reason] || w.reason) : '');
+        return `
         <div class="qa-learned-item">
-          <span class="qa-learned-badge ${w.verdict === 'mistake' ? 'mistake' : 'not-mistake'}">${w.verdict === 'mistake' ? 'Real mistake' : 'Not a mistake'}</span>
+          <span class="qa-learned-badge ${w.verdict === 'mistake' ? 'mistake' : 'not-mistake'}">${escapeHtml(badgeLabel)}</span>
           <span class="qa-learned-word">${escapeHtml(w.word)}</span>
           <span class="qa-learned-context">${escapeHtml(w.context || '')}</span>
           <div class="qa-learned-actions" id="qa-learned-actions-${i}">
             <button class="qa-learned-delete-btn" onclick="qaLearnedDeletePrompt(${i})">Delete</button>
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
     })
     .catch(() => { list.innerHTML = '<div class="fb-empty">Could not load learned words.</div>'; });
 }
