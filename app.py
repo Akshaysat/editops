@@ -1219,6 +1219,21 @@ HINGLISH_WORDS = frozenset({
     'kafi', 'pyaar', 'pyar', 'dil', 'insaan', 'samay', 'waqt',
 })
 
+# Finance/investment jargon and acronyms that are legitimate but not in a
+# general English dictionary (confirmed missing via direct lookup, e.g.
+# "underperforming" — present in real client content, unlike "outperforming"
+# which the dictionary does know). A starter list, not exhaustive; extend
+# as real false positives turn up, same as HINGLISH_WORDS.
+FINANCE_JARGON_WORDS = frozenset({
+    'sebi', 'rbi', 'irdai', 'amc', 'amfi', 'nav', 'sip', 'sips', 'elss',
+    'etf', 'etfs', 'ipo', 'ipos', 'nfo', 'nfos', 'kyc', 'cagr', 'aum',
+    'ltcg', 'stcg', 'ulip', 'ulips', 'npa', 'npas', 'nifty', 'sensex',
+    'bse', 'nse', 'fintech', 'demat', 'folio', 'lumpsum', 'largecap',
+    'midcap', 'smallcap', 'multicap', 'flexicap', 'fmcg', 'pharma',
+    'underperforming', 'underperform', 'underperformance', 'overperform',
+    'rebalancing', 'rebalance', 'derivatives', 'equities', 'fincard',
+})
+
 
 def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
     """Like check_spelling, but skips a whole line when most of its words
@@ -1237,8 +1252,16 @@ def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
         from spellchecker import SpellChecker
         import re
         spell = SpellChecker()
+        # A bare "@" alone is included (not just full email patterns) since
+        # OCR frequently drops the period in domains ("service@tataamccom"
+        # instead of "service@tataamc.com") — ordinary prose essentially
+        # never contains "@", so its presence alone is a strong enough signal.
+        url_pattern = re.compile(
+            r'https?://|www\.|@|\.(com|in|org|net|co)\b', re.IGNORECASE)
         issues = []
         for i, seg in enumerate(segments):
+            if url_pattern.search(seg['text']):
+                continue  # URLs/emails word-split into garbage tokens, never real prose
             words = re.findall(r"[A-Za-z']+", seg['text'])
             to_check = [w.lower().strip("'") for w in words
                         if len(w) > 2 and not w.isupper()]
@@ -1248,7 +1271,7 @@ def qa_check_spelling(segments, max_unknown_ratio=0.5, min_words_for_ratio=4):
             if len(to_check) >= min_words_for_ratio and len(unknown) / len(to_check) > max_unknown_ratio:
                 continue
             for word in unknown:
-                if word in HINGLISH_WORDS:
+                if word in HINGLISH_WORDS or word in FINANCE_JARGON_WORDS:
                     continue
                 best = spell.correction(word)
                 others = sorted(spell.candidates(word) or set())
