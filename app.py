@@ -1314,6 +1314,20 @@ def qa_dedupe_issues(issues, window=5.0):
     return kept
 
 
+# OCR confidence below this is more likely a mid-animation blur/partial-
+# render artifact than genuine text — settled, cleanly-rendered text reads
+# with much higher confidence in practice (0.8+ typically). Also happens to
+# catch small dense text like disclaimers: confidence drops with size even
+# when the text is fully legible, since OCR is just less certain about it.
+QA_MIN_OCR_CONFIDENCE = 0.6
+
+# Text shorter than this fraction of frame height is treated as fine print
+# (legal disclaimers, copyright notices) rather than a graphic — kept as a
+# second, independent check in case dense small text somehow still scores
+# high confidence (e.g. very crisp text in a high-res source).
+QA_MIN_TEXT_HEIGHT_FRAC = 0.03
+
+
 def qa_scan_frames(frames, progress_cb=None):
     """Runs OCR on each sampled frame, auto-detects and excludes this
     video's subtitle band, spellchecks what's left (skipping likely-
@@ -1332,7 +1346,10 @@ def qa_scan_frames(frames, progress_cb=None):
             progress_cb(i, len(frames))
         frame_h = Image.open(frame_path).size[1]
         for bbox, text, conf in reader.readtext(frame_path):
-            if conf < 0.4:
+            if conf < QA_MIN_OCR_CONFIDENCE:
+                continue
+            ys = [p[1] for p in bbox]
+            if (max(ys) - min(ys)) < frame_h * QA_MIN_TEXT_HEIGHT_FRAC:
                 continue
             raw_results.append((ts, frame_path, bbox, text, frame_h))
 
