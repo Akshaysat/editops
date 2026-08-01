@@ -1256,6 +1256,40 @@ def qa_get_dismissed_words():
     return {w for w, v in latest.items() if v == 'not_mistake'}
 
 
+def qa_is_merged_words(word, spell, min_total_len=9, min_part_len=2, max_part_len=15):
+    """True if `word` can be fully segmented into 2+ real dictionary words
+    with no leftover characters — a strong signal OCR merged separate
+    words together (missed a space) rather than this being a genuine
+    typo, e.g. "understandyour" -> "understand" + "your".
+
+    Gated by min_total_len so short words are never affected: a real typo
+    can coincidentally look like two short words mashed together
+    ("wellcome" = "well" + "come", one of this app's own confirmed real
+    typos), but that risk drops sharply as length grows — both because
+    longer merges increasingly require 3+ exact-boundary matches to fully
+    segment (matching one wrong dictionary word by luck is plausible,
+    matching a whole chain of them at the exact right cut points isn't),
+    and because requiring a *complete* segmentation with nothing left over
+    is a much stricter bar than any single substring happening to be a
+    real word."""
+    word = word.lower()
+    n = len(word)
+    if n < min_total_len:
+        return False
+
+    min_parts = [None] * (n + 1)  # fewest dictionary words to reach prefix of length i
+    min_parts[0] = 0
+    for i in range(1, n + 1):
+        for j in range(max(0, i - max_part_len), i - min_part_len + 1):
+            if min_parts[j] is None:
+                continue
+            if spell.known([word[j:i]]):
+                if min_parts[i] is None or min_parts[j] + 1 < min_parts[i]:
+                    min_parts[i] = min_parts[j] + 1
+
+    return min_parts[n] is not None and min_parts[n] >= 2
+
+
 def qa_check_spelling(segments, dismissed_words=frozenset(), max_unknown_ratio=0.5, min_words_for_ratio=4):
     """Like check_spelling, but skips a whole line when most of its words
     aren't recognized by the English dictionary — much more likely a
@@ -1280,12 +1314,19 @@ def qa_check_spelling(segments, dismissed_words=frozenset(), max_unknown_ratio=0
         # OCR frequently drops the period in domains ("service@tataamccom"
         # instead of "service@tataamc.com") — ordinary prose essentially
         # never contains "@", so its presence alone is a strong enough signal.
-        # "tatamutualfund" specifically: OCR frequently merges "www" and the
-        # domain into one run-on token with no dot at all ("wtatamutualfund
-        # comldeshkarenivvesh" instead of "www.tatamutualfund.com/..."),
-        # leaving no www./.com pattern left to match generically.
+        # \bwww[a-z] (no dot required) catches OCR merging "www" straight
+        # into the domain ("wwwicicidirect" instead of "www.icicidirect"),
+        # general across any client's domain rather than one hardcoded name.
+        # "tatamutualfund" stays as a specific catch for a related but
+        # different corruption — OCR sometimes drops one or two of the w's
+        # too ("wtatamutualfund"/"wwtatamutualfund"), which won't match
+        # \bwww[a-z] since it no longer starts with a full "www".
+        # \bhttps?\b alone (not just "https://") since OCR sometimes mangles
+        # the slashes into something else entirely ("https:|" instead of
+        # "https://") — a bare "http"/"https" token is still an unambiguous
+        # signal the line is a URL fragment, whatever follows it.
         url_pattern = re.compile(
-            r'https?://|www\.|@|\.(com|in|org|net|co)\b|tatamutualfund',
+            r'https?://|\bhttps?\b|www\.|\bwww[a-z]|@|\.(com|in|org|net|co)\b|tatamutualfund',
             re.IGNORECASE)
         issues = []
         for i, seg in enumerate(segments):
@@ -1301,6 +1342,8 @@ def qa_check_spelling(segments, dismissed_words=frozenset(), max_unknown_ratio=0
                 continue
             for word in unknown:
                 if word in HINGLISH_WORDS or word in FINANCE_JARGON_WORDS or word in dismissed_words:
+                    continue
+                if qa_is_merged_words(word, spell):
                     continue
                 best = spell.correction(word)
                 others = sorted(spell.candidates(word) or set())
