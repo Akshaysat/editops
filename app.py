@@ -70,23 +70,40 @@ def auto_update():
             print('✅  App is up to date.')
             return
 
+        # Capture HEAD before pulling so the requirements-changed check below
+        # covers every commit being pulled, not just the last one — with
+        # multiple commits behind, diffing HEAD~1..HEAD only sees the final
+        # commit's file changes and can miss a requirements.txt change from
+        # earlier in the range.
+        old_head = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=repo_dir, capture_output=True, text=True, timeout=10).stdout.strip()
+
         print(f'⬇️   {commits_behind} update(s) found. Pulling latest version...')
         subprocess.run(['git', 'pull', 'origin', 'main'],
                        cwd=repo_dir, capture_output=True, timeout=30)
 
-        # Re-install dependencies in case requirements.txt changed
-        # Only re-install if a requirements file changed in this pull
+        # Re-install dependencies if a requirements file changed anywhere in
+        # the pulled range.
         req_changed = subprocess.run(
-            ['git', 'diff', 'HEAD~1', 'HEAD', '--name-only'],
+            ['git', 'diff', old_head, 'HEAD', '--name-only'],
             cwd=repo_dir, capture_output=True, text=True).stdout
         req_file = 'requirements-windows.txt' if os.name == 'nt' else 'requirements.txt'
-        pip_bin  = 'Scripts\\pip' if os.name == 'nt' else os.path.join('venv', 'bin', 'pip')
+        pip_bin  = os.path.join('venv', 'Scripts', 'pip.exe') if os.name == 'nt' \
+                   else os.path.join('venv', 'bin', 'pip')
         pip      = os.path.join(repo_dir, pip_bin)
-        if 'requirements' in req_changed and os.path.exists(pip):
+        if 'requirements' in req_changed:
             print('📦  Updating dependencies...')
-            subprocess.run([pip, 'install', '-r',
-                            os.path.join(repo_dir, req_file), '-q'],
-                           cwd=repo_dir, timeout=600)
+            try:
+                subprocess.run([pip, 'install', '-r',
+                                os.path.join(repo_dir, req_file), '-q'],
+                               cwd=repo_dir, timeout=600)
+            except Exception as e:
+                # Don't let a failed dependency install block the restart
+                # below — the new code is already pulled, and several
+                # routes already degrade gracefully (clear "missing
+                # dependency" error) if a new package didn't get installed.
+                print(f'⚠️   Dependency update failed (continuing anyway): {e}')
 
         print('🔁  Restarting app with latest version...\n')
         time.sleep(1)
