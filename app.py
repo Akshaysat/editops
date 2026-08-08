@@ -1384,29 +1384,64 @@ def qa_y_bucket(y_mid, frame_h):
     return round(y_mid / frame_h * 20) / 20
 
 
-def qa_detect_subtitle_band(raw_results, total_frames, min_frac=0.35):
-    """Auto-detects this video's actual subtitle Y-position instead of
-    assuming a fixed percentage: subtitles are rendered by the same
-    template in the same spot every time they appear, so they cluster
-    tightly in the bottom half of frame across many sampled frames — a
-    one-off graphic won't recur at the same position anywhere near as
-    often. Returns the dominant bucket, or None if nothing clearly
-    dominates (in which case nothing gets excluded — safer to risk a
-    missed subtitle than to blindly exclude real graphic text)."""
-    buckets = {}
-    for _ts, _frame_path, bbox, _text, frame_h in raw_results:
+def qa_detect_recurring_bands(raw_results, frames, min_run_frac=0.2):
+    """Auto-detects Y-positions in the bottom half of frame that hold a
+    single, mostly-unbroken template element — a subtitle track, or a
+    continuously-shown disclaimer — instead of assuming a fixed percentage
+    or judging by text size.
+
+    Deliberately not size-based: in real content, a compact infographic's
+    small labels can be physically smaller than a disclaimer line, so
+    filtering by height would hide legitimate (and possibly misspelled)
+    graphic text right along with the disclaimer — proven concretely
+    against a real sample video where a confirmed typo in a small graphic
+    label measured smaller than that video's own disclaimer text.
+
+    Also deliberately not just "total frequency in this band", which
+    turned out to have the same kind of failure mode from a different
+    angle: on a video with several distinct full-screen graphics/UI
+    screenshots, unrelated one-off content from completely different
+    points in the video can coincidentally land in the same Y-band often
+    enough to clear a frequency threshold, even though none of them are
+    individually recurring — confirmed concretely on a real sample video,
+    where a genuine disclaimer band (present in a single unbroken 26-frame
+    stretch) had *lower* total frequency than a band that was actually a
+    coincidental mix of five unrelated screens (max unbroken stretch: 12
+    frames), meaning no frequency cutoff could separate them correctly.
+
+    The signal that did cleanly separate them: longest *unbroken* run of
+    consecutive sampled frames. A real template element persists across a
+    continuous stretch; unrelated screens sharing a Y-band by coincidence
+    show up as several short, scattered bursts instead. Qualifies a band
+    if its longest unbroken run is at least min_run_frac of all sampled
+    frames. Empty set if nothing clearly qualifies (safer to risk missing
+    one than to blindly exclude real graphic text)."""
+    bucket_frames = {}
+    for ts, _frame_path, bbox, _text, frame_h in raw_results:
         y_mid = sum(p[1] for p in bbox) / len(bbox)
         if y_mid < frame_h * 0.6:
             continue
         b = qa_y_bucket(y_mid, frame_h)
-        buckets[b] = buckets.get(b, 0) + 1
+        bucket_frames.setdefault(b, set()).add(ts)
 
-    if not buckets:
-        return None
-    bucket, count = max(buckets.items(), key=lambda kv: kv[1])
-    if count / max(1, total_frames) < min_frac:
-        return None
-    return bucket
+    total_frames = len(frames)
+    if total_frames < 2:
+        return set()
+    interval = frames[1][0] - frames[0][0]
+
+    qualifying = set()
+    for b, ts_set in bucket_frames.items():
+        ts_sorted = sorted(ts_set)
+        longest = cur = 1
+        for i in range(1, len(ts_sorted)):
+            if abs(ts_sorted[i] - ts_sorted[i - 1] - interval) < interval * 0.1:
+                cur += 1
+            else:
+                cur = 1
+            longest = max(longest, cur)
+        if longest / total_frames >= min_run_frac:
+            qualifying.add(b)
+    return qualifying
 
 
 def qa_dedupe_issues(issues, window=5.0):
@@ -1428,8 +1463,9 @@ def qa_dedupe_issues(issues, window=5.0):
 
 def qa_scan_frames(frames, progress_cb=None):
     """Runs OCR on each sampled frame, auto-detects and excludes this
-    video's subtitle band, spellchecks what's left (skipping likely-
-    non-English lines — see qa_check_spelling), and returns deduped
+    video's recurring bands (subtitles, continuously-shown disclaimers),
+    spellchecks what's left (skipping likely-non-English lines — see
+    qa_check_spelling), and returns deduped
     issues with cropped thumbnails."""
     from PIL import Image
 
@@ -1448,14 +1484,14 @@ def qa_scan_frames(frames, progress_cb=None):
                 continue
             raw_results.append((ts, frame_path, bbox, text, frame_h))
 
-    subtitle_bucket = qa_detect_subtitle_band(raw_results, len(frames))
+    recurring_bands = qa_detect_recurring_bands(raw_results, frames)
 
     ocr_segments = []   # [{'text', 'start'}] — qa_check_spelling's expected shape
     frame_meta   = []   # parallel to ocr_segments: (frame_path, bbox)
     for ts, frame_path, bbox, text, frame_h in raw_results:
-        if subtitle_bucket is not None:
+        if recurring_bands:
             y_mid = sum(p[1] for p in bbox) / len(bbox)
-            if qa_y_bucket(y_mid, frame_h) == subtitle_bucket:
+            if qa_y_bucket(y_mid, frame_h) in recurring_bands:
                 continue
         ocr_segments.append({'text': text, 'start': ts})
         frame_meta.append((frame_path, bbox))
