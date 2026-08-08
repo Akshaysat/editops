@@ -263,7 +263,7 @@ def speed_route():
     cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
            '-filter_complex', fc, *maps,
            *vcodec,
-           '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
+           '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart',
            output_path]
 
     r = subprocess.run(cmd, capture_output=True)
@@ -422,11 +422,11 @@ def merge_route():
 
     if is_video_merge:
         output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-        # Explicit mapping — see /convert for why.
+        # Explicit mapping and stereo downmix — see /convert for why.
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
                '-map', '0:v:0?', '-map', '0:a:0?',
                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-               '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
+               '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart',
                output_path]
         download_name = 'merged_video.mp4'
     else:
@@ -574,7 +574,9 @@ def convert_route():
     output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{cfg["ext"]}')
 
     if cfg.get('audio_only'):
-        cmd = ['ffmpeg', '-y', '-i', input_path, '-vn', '-c:a', cfg['acodec']]
+        # Downmix to stereo: a 5.1/multichannel source re-encoded without
+        # -ac keeps 6 channels but many players choke on that in mp3/wav.
+        cmd = ['ffmpeg', '-y', '-i', input_path, '-vn', '-ac', '2', '-c:a', cfg['acodec']]
         if cfg.get('abr'):
             cmd += ['-b:a', cfg['abr']]
         cmd.append(output_path)
@@ -600,10 +602,19 @@ def convert_route():
         # audio despite the command otherwise looking correct. The "?"
         # suffix makes each map optional so this doesn't hard-fail when a
         # stream type genuinely isn't present.
+        #
+        # -ac 2: a 5.1/multichannel source (e.g. EAC3 from an MKV) re-encoded
+        # to AAC without forcing the channel count keeps 6 channels but with
+        # an unrecognized channel layout in the mp4 container — the track is
+        # structurally present and ffprobe reports it fine, but many real
+        # players (notably Windows' built-in AAC decoder) silently refuse to
+        # play it, which reads to a user as "audio completely missing" even
+        # though the conversion "succeeded". Downmixing to stereo sidesteps
+        # the whole class of multichannel-layout compatibility problems.
         cmd = ['ffmpeg', '-y', '-i', input_path,
                '-map', '0:v:0?', '-map', '0:a:0?',
                '-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18',
-               '-c:a', cfg['acodec'], '-b:a', '192k',
+               '-c:a', cfg['acodec'], '-ac', '2', '-b:a', '192k',
                '-movflags', '+faststart', output_path]
         r = subprocess.run(cmd, capture_output=True)
 
