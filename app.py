@@ -373,7 +373,10 @@ def trim_route():
     cmd += ['-i', input_path]
     if end:
         cmd += ['-to', end]
-    cmd += ['-c', 'copy', output_path]
+    # Explicit mapping — see /convert for why: implicit stream selection can
+    # silently drop audio on some source files (e.g. no track flagged as
+    # the "default" one).
+    cmd += ['-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', output_path]
 
     r = subprocess.run(cmd, capture_output=True)
     cleanup_later(input_path)
@@ -419,7 +422,9 @@ def merge_route():
 
     if is_video_merge:
         output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+        # Explicit mapping — see /convert for why.
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+               '-map', '0:v:0?', '-map', '0:a:0?',
                '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
                '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart',
                output_path]
@@ -588,7 +593,15 @@ def convert_route():
             capture_output=True)
         cleanup_later(palette)
     else:
+        # Explicit stream mapping rather than relying on ffmpeg's automatic
+        # selection — without it, some source files (e.g. an MKV with no
+        # audio track flagged as the "default" one) can end up with ffmpeg
+        # not auto-selecting an audio stream at all, silently dropping
+        # audio despite the command otherwise looking correct. The "?"
+        # suffix makes each map optional so this doesn't hard-fail when a
+        # stream type genuinely isn't present.
         cmd = ['ffmpeg', '-y', '-i', input_path,
+               '-map', '0:v:0?', '-map', '0:a:0?',
                '-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18',
                '-c:a', cfg['acodec'], '-b:a', '192k',
                '-movflags', '+faststart', output_path]
