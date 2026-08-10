@@ -1343,7 +1343,7 @@ def qa_is_merged_words(word, spell, min_total_len=9, min_part_len=2, max_part_le
 
 
 def qa_check_spelling(segments, dismissed_words=frozenset(), max_unknown_ratio=0.5, min_words_for_ratio=4):
-    """Like check_spelling, but skips a whole line when most of its words
+    """Per-word English spellcheck across segments, but skips a whole line when most of its words
     aren't recognized by the English dictionary — much more likely a
     non-English (e.g. Hinglish) sentence than one riddled with typos, so
     flagging individual words in it would mostly be noise. HINGLISH_WORDS
@@ -1711,34 +1711,6 @@ def gemini_transcribe(wav_path, language=None):
     return segs, (language or '')
 
 
-def check_spelling(segments):
-    """Return list of {seg_idx, word, suggestions, start} for misspelled English words."""
-    try:
-        from spellchecker import SpellChecker
-        import re
-        spell = SpellChecker()
-        issues = []
-        for i, seg in enumerate(segments):
-            # Only check Latin-script words — Devanagari/Hindi passes through untouched
-            words = re.findall(r"[A-Za-z']+", seg['text'])
-            to_check = [w.lower().strip("'") for w in words
-                        if len(w) > 2 and not w.isupper()]
-            for word in spell.unknown(to_check):
-                best = spell.correction(word)
-                others = sorted(spell.candidates(word) or set())
-                suggestions = ([best] if best and best != word else []) + \
-                              [c for c in others if c != word and c != best]
-                issues.append({
-                    'seg_idx':     i,
-                    'word':        word,
-                    'suggestions': suggestions[:3],
-                    'start':       seg['start'],
-                })
-        return issues
-    except Exception:
-        return []
-
-
 def segments_to_srt(segments):
     def fmt(t):
         h = int(t // 3600)
@@ -1778,7 +1750,7 @@ def transcribe_route():
                 return
 
             if model == 'gemini':
-                _tasks[uid]['progress'] = 'Transcribing… (Gemini 2.0)'
+                _tasks[uid]['progress'] = 'Transcribing… (Gemini)'
                 segs, detected_language = gemini_transcribe(wav_path, language)
             else:
                 _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
@@ -1810,20 +1782,16 @@ def transcribe_route():
                 for s in segs:
                     s['text'] = romanize_text(s['text'])
 
-            _tasks[uid]['progress'] = 'Checking spelling…'
-            spell_issues = check_spelling(segs)
-
             srt_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.srt')
             with open(srt_path, 'w', encoding='utf-8') as f:
                 f.write(segments_to_srt(segs))
 
             _tasks[uid] = {
-                'status':          'done',
-                'result':          srt_path,
-                'filename':        f'{original_stem}.srt',
-                'language':        detected_language,
-                'segments':        segs,
-                'spelling_issues': spell_issues,
+                'status':   'done',
+                'result':   srt_path,
+                'filename': f'{original_stem}.srt',
+                'language': detected_language,
+                'segments': segs,
             }
             cleanup_later(wav_path)
             cleanup_later(input_path)
