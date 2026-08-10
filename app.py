@@ -2,6 +2,17 @@ from flask import Flask, request, render_template, send_file, jsonify
 import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil
 import urllib.request, urllib.error, urllib.parse
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Each teammate provides their own key locally in a gitignored .env file
+# (GEMINI_API_KEY=...) — never commit this, unlike the Supabase anon key
+# above which is safe to embed because it's gated by RLS, not secrecy.
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+
 _tasks = {}   # task_id → {status, progress, result, filename, error}
 
 app = Flask(__name__)
@@ -1655,6 +1666,51 @@ def romanize_text(text):
         return text
 
 
+def gemini_transcribe(wav_path, language=None):
+    """Transcribe via the Gemini API. Returns (segments, detected_language).
+
+    Unlike Whisper, Gemini has no native forced-alignment — timestamps are
+    the model reading them back off its own transcript, so they're
+    reasonably good for short/medium files but can drift on long ones.
+    Raises on any failure (missing key, API error, bad response) so the
+    caller can surface a clear task error.
+    """
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            'Gemini API key not configured. Add GEMINI_API_KEY to a .env '
+            'file in the EditOps folder and restart the app.')
+
+    from google import genai
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    uploaded = client.files.upload(file=wav_path)
+
+    lang_hint = f' The spoken language is {language}.' if language else ''
+    prompt = (
+        'Transcribe this audio.' + lang_hint +
+        ' Return ONLY a JSON array (no markdown, no commentary) of objects '
+        'with keys "start" (seconds, number), "end" (seconds, number), and '
+        '"text" (string), one per natural sentence or phrase, covering the '
+        'entire audio from start to finish in order.'
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[uploaded, prompt],
+    )
+
+    raw = response.text.strip()
+    if raw.startswith('```'):
+        raw = raw.split('\n', 1)[1] if '\n' in raw else raw
+        raw = raw.rsplit('```', 1)[0]
+    parsed = json.loads(raw)
+
+    segs = [
+        {'start': float(s['start']), 'end': float(s['end']), 'text': s['text'].strip()}
+        for s in parsed
+    ]
+    return segs, (language or '')
+
+
 def check_spelling(segments):
     """Return list of {seg_idx, word, suggestions, start} for misspelled English words."""
     try:
@@ -1704,6 +1760,7 @@ def transcribe_route():
 
     language = request.form.get('language') or None
     romanize = request.form.get('romanize') == '1'
+    model    = request.form.get('model') or 'whisper'
     input_path, uid = save_upload(file, fallback_ext='.mp4')
     original_stem = stem(file.filename)
     _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
@@ -1720,29 +1777,34 @@ def transcribe_route():
                 cleanup_later(input_path)
                 return
 
-            _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
-
-            try:
-                import mlx_whisper
-                result = mlx_whisper.transcribe(
-                    wav_path,
-                    path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
-                    language=language,
-                    verbose=False,
-                )
-            except ImportError:
-                import whisper as _whisper
-                _tasks[uid]['progress'] = 'Transcribing… (loading Whisper model)'
+            if model == 'gemini':
+                _tasks[uid]['progress'] = 'Transcribing… (Gemini 2.0)'
+                segs, detected_language = gemini_transcribe(wav_path, language)
+            else:
+                _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
                 try:
-                    _model = _whisper.load_model('turbo')
-                except Exception:
-                    _model = _whisper.load_model('large-v3')
-                result = _model.transcribe(wav_path, language=language, verbose=False)
+                    import mlx_whisper
+                    result = mlx_whisper.transcribe(
+                        wav_path,
+                        path_or_hf_repo='mlx-community/whisper-large-v3-turbo',
+                        language=language,
+                        verbose=False,
+                    )
+                except ImportError:
+                    import whisper as _whisper
+                    _tasks[uid]['progress'] = 'Transcribing… (loading Whisper model)'
+                    try:
+                        _model = _whisper.load_model('turbo')
+                    except Exception:
+                        _model = _whisper.load_model('large-v3')
+                    result = _model.transcribe(wav_path, language=language, verbose=False)
 
-            segs = [
-                {'start': s['start'], 'end': s['end'], 'text': s['text'].strip()}
-                for s in result.get('segments', [])
-            ]
+                segs = [
+                    {'start': s['start'], 'end': s['end'], 'text': s['text'].strip()}
+                    for s in result.get('segments', [])
+                ]
+                detected_language = result.get('language', '')
+
             if romanize:
                 _tasks[uid]['progress'] = 'Romanizing…'
                 for s in segs:
@@ -1759,7 +1821,7 @@ def transcribe_route():
                 'status':          'done',
                 'result':          srt_path,
                 'filename':        f'{original_stem}.srt',
-                'language':        result.get('language', ''),
+                'language':        detected_language,
                 'segments':        segs,
                 'spelling_issues': spell_issues,
             }

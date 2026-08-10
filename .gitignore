@@ -7,3 +7,4 @@ EditOps.app/
 uploads/
 *.srt
 test_videos/
+.env

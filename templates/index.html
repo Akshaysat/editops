@@ -850,6 +850,14 @@
       </div>
 
       <div class="field">
+        <label>Model</label>
+        <select id="tr-model" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;" onchange="onTranscribeModelChange()">
+          <option value="whisper">Local (Whisper) — private, runs on this machine</option>
+          <option value="gemini">Gemini — cloud, sends audio to Google</option>
+        </select>
+      </div>
+
+      <div class="field">
         <label>Language</label>
         <select id="tr-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
           <option value="">Auto-detect</option>
@@ -876,9 +884,13 @@
         <span style="font-size:14px;">Romanize Hindi/Urdu text <span style="color:var(--muted);font-size:12px;">(Devanagari → Roman script, good for Hinglish)</span></span>
       </label>
 
-      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+      <div class="hint" id="tr-hint-whisper" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
         ⚡ Runs on your M-series chip via Metal GPU &nbsp;·&nbsp; ~real-time speed<br>
         📦 First run downloads the model (~1.6 GB, cached after that)
+      </div>
+      <div class="hint" id="tr-hint-gemini" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
+        ⏱️ Timestamps are approximate (Gemini doesn't force-align like Whisper does), more accurate on shorter clips.
       </div>
 
       <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
@@ -1666,9 +1678,16 @@ function submitYT() {
 }
 
 // ── Transcribe ─────────────────────────────────────────────────────────────
+function onTranscribeModelChange() {
+  const model = document.getElementById('tr-model').value;
+  document.getElementById('tr-hint-whisper').style.display = model === 'gemini' ? 'none' : 'block';
+  document.getElementById('tr-hint-gemini').style.display  = model === 'gemini' ? 'block' : 'none';
+}
+
 function submitTranscribe() {
   const file = document.getElementById('f-transcribe').files[0];
   if (!file) return alert('Please select a video or audio file first.');
+  const model    = document.getElementById('tr-model').value;
   const lang     = document.getElementById('tr-lang').value;
   const romanize = document.getElementById('tr-romanize').checked;
 
@@ -1677,6 +1696,7 @@ function submitTranscribe() {
 
   const form = new FormData();
   form.append('file', file);
+  form.append('model', model);
   if (lang) form.append('language', lang);
   if (romanize) form.append('romanize', '1');
 
