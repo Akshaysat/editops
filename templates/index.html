@@ -320,6 +320,11 @@
       color: var(--success);
       margin-bottom: 12px;
     }
+    .tr-stats {
+      font-size: 12px;
+      color: var(--muted);
+      margin: -6px 0 12px;
+    }
     .download-btn {
       display: inline-block;
       padding: 9px 22px;
@@ -1754,7 +1759,7 @@ function pollTranscribe(taskId, startTime) {
       _trSegsOrig = (data.segments || []).map(s => ({...s}));
       _trFilename = data.filename || 'transcript.srt';
 
-      renderTranscriptResult(data.segments ? data.segments.length : 0);
+      renderTranscriptResult(data.segments ? data.segments.length : 0, data.stats || null);
     } else {
       showError('transcribe', data.error || 'Transcription failed.');
     }
@@ -1778,7 +1783,14 @@ function escHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
-function renderTranscriptResult(count) {
+function fmtStatsDuration(s) {
+  if (s == null) return '—';
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function renderTranscriptResult(count, stats) {
   const rb        = document.getElementById('rb-transcribe');
   const extra     = document.getElementById('tr-extra');
   const fileInput = document.getElementById('f-transcribe');
@@ -1791,9 +1803,19 @@ function renderTranscriptResult(count) {
     playerHtml = `<div class="tr-player-wrap"><${tag} id="tr-player" controls></${tag}></div>`;
   }
 
+  let statsHtml = '';
+  if (stats) {
+    statsHtml = `<div class="tr-stats">` +
+      `File: ${stats.file_size_mb} MB &nbsp;·&nbsp; ` +
+      `Duration: ${fmtStatsDuration(stats.duration_sec)} &nbsp;·&nbsp; ` +
+      `Transcribed in: ${fmtStatsDuration(stats.transcription_time_sec)}` +
+      `</div>`;
+  }
+
   // Compact success banner: title, player, download — kept in the green box
   rb.innerHTML = `
     <div class="result-title">✓ Transcription complete! (${count} segments)</div>
+    ${statsHtml}
     ${playerHtml}
     <button class="download-btn" onclick="downloadTranscript()">⬇ Download .srt file</button>`;
   rb.classList.add('visible');

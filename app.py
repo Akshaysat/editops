@@ -1739,6 +1739,10 @@ def transcribe_route():
 
     def run():
         wav_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.wav')
+        t_start = time.time()
+        file_size_mb = round(os.path.getsize(input_path) / (1024 * 1024), 2)
+        media_info = ffprobe_info(input_path)
+        duration_sec = round(media_info['duration'], 1) if media_info else None
         try:
             r = subprocess.run(
                 ['ffmpeg', '-y', '-i', input_path,
@@ -1792,6 +1796,11 @@ def transcribe_route():
                 'filename': f'{original_stem}.srt',
                 'language': detected_language,
                 'segments': segs,
+                'stats': {
+                    'file_size_mb':          file_size_mb,
+                    'duration_sec':          duration_sec,
+                    'transcription_time_sec': round(time.time() - t_start, 1),
+                },
             }
             cleanup_later(wav_path)
             cleanup_later(input_path)
