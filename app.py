@@ -1666,7 +1666,25 @@ def romanize_text(text):
         return text
 
 
-def gemini_transcribe(wav_path, language=None):
+def _gemini_client():
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            'Gemini API key not configured. Add GEMINI_API_KEY to a .env '
+            'file in the EditOps folder and restart the app.')
+    from google import genai
+    return genai.Client(api_key=GEMINI_API_KEY)
+
+
+def _parse_gemini_json(response):
+    """Strip an optional ```json fence and parse the response text as JSON."""
+    raw = response.text.strip()
+    if raw.startswith('```'):
+        raw = raw.split('\n', 1)[1] if '\n' in raw else raw
+        raw = raw.rsplit('```', 1)[0]
+    return json.loads(raw)
+
+
+def gemini_transcribe(wav_path, language=None, romanize=False):
     """Transcribe via the Gemini API. Returns (segments, detected_language).
 
     Unlike Whisper, Gemini has no native forced-alignment — timestamps are
@@ -1675,19 +1693,22 @@ def gemini_transcribe(wav_path, language=None):
     Raises on any failure (missing key, API error, bad response) so the
     caller can surface a clear task error.
     """
-    if not GEMINI_API_KEY:
-        raise RuntimeError(
-            'Gemini API key not configured. Add GEMINI_API_KEY to a .env '
-            'file in the EditOps folder and restart the app.')
-
-    from google import genai
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = _gemini_client()
     uploaded = client.files.upload(file=wav_path)
 
     lang_hint = f' The spoken language is {language}.' if language else ''
+    script_instruction = (
+        ' Any Hindi/Urdu (or other non-Latin-script) speech must be written '
+        'in casual Roman-script transliteration the way people actually type '
+        'it informally (e.g. "kya kar rahe ho", "nahi pata") — NOT formal '
+        'academic transliteration with diacritics or capitalized long vowels. '
+        'English speech stays in English as normal.'
+        if romanize else
+        ' Write each language in its own native script (e.g. Devanagari for '
+        'Hindi), not transliterated.'
+    )
     prompt = (
-        'Transcribe this audio.' + lang_hint +
+        'Transcribe this audio.' + lang_hint + script_instruction +
         ' Return ONLY a JSON array (no markdown, no commentary) of objects '
         'with keys "start" (seconds, number), "end" (seconds, number), and '
         '"text" (string), one per natural sentence or phrase, covering the '
@@ -1697,18 +1718,43 @@ def gemini_transcribe(wav_path, language=None):
         model='gemini-flash-latest',
         contents=[uploaded, prompt],
     )
-
-    raw = response.text.strip()
-    if raw.startswith('```'):
-        raw = raw.split('\n', 1)[1] if '\n' in raw else raw
-        raw = raw.rsplit('```', 1)[0]
-    parsed = json.loads(raw)
+    parsed = _parse_gemini_json(response)
 
     segs = [
         {'start': float(s['start']), 'end': float(s['end']), 'text': s['text'].strip()}
         for s in parsed
     ]
     return segs, (language or '')
+
+
+def gemini_romanize_segments(segs):
+    """Rewrite Devanagari (or other non-Latin) text in `segs` as casual
+    Roman-script Hinglish via Gemini, the way people actually type it —
+    much closer to natural than the local ITRANS transliteration library,
+    which produces technically-correct but unnatural output (capitalized
+    long vowels, retained schwas, etc). Returns a new list; raises on
+    failure so the caller can decide how to fall back.
+    """
+    client = _gemini_client()
+    prompt = (
+        'Here is a JSON array of transcript lines. Any Devanagari (or other '
+        'non-Latin-script) text in them should be rewritten as casual '
+        'Roman-script transliteration the way people actually type it '
+        'informally (e.g. "kya kar rahe ho", "nahi pata") — NOT formal '
+        'academic transliteration with diacritics or capitalized long '
+        'vowels. Lines already in Latin script should be returned '
+        'unchanged. Return ONLY a JSON array of strings, same length and '
+        'order as the input, no markdown, no commentary.\n\n' +
+        json.dumps([s['text'] for s in segs], ensure_ascii=False)
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[prompt],
+    )
+    parsed = _parse_gemini_json(response)
+    if len(parsed) != len(segs):
+        raise ValueError('Gemini romanize returned a different number of lines than sent.')
+    return [{**s, 'text': str(t).strip()} for s, t in zip(segs, parsed)]
 
 
 def segments_to_srt(segments):
@@ -1755,7 +1801,9 @@ def transcribe_route():
 
             if model == 'gemini':
                 _tasks[uid]['progress'] = 'Transcribing… (Gemini)'
-                segs, detected_language = gemini_transcribe(wav_path, language)
+                segs, detected_language = gemini_transcribe(wav_path, language, romanize)
+                # Gemini already wrote the requested script directly — no
+                # separate romanization pass needed for this path.
             else:
                 _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
                 try:
@@ -1781,10 +1829,18 @@ def transcribe_route():
                 ]
                 detected_language = result.get('language', '')
 
-            if romanize:
-                _tasks[uid]['progress'] = 'Romanizing…'
-                for s in segs:
-                    s['text'] = romanize_text(s['text'])
+                if romanize:
+                    _tasks[uid]['progress'] = 'Romanizing…'
+                    # Whisper always transcribes in native script, so this
+                    # always needs a conversion pass. Prefer Gemini for much
+                    # more natural output than the local ITRANS library;
+                    # fall back to local if no key configured or the call
+                    # fails, so this never blocks an otherwise-local job.
+                    try:
+                        segs = gemini_romanize_segments(segs)
+                    except Exception:
+                        for s in segs:
+                            s['text'] = romanize_text(s['text'])
 
             srt_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.srt')
             with open(srt_path, 'w', encoding='utf-8') as f:
