@@ -503,13 +503,19 @@
       letter-spacing: 1px;
       color: var(--text);
     }
+    .trim-timeline-viewport {
+      margin-top: 6px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
     .trim-timeline {
       position: relative;
       height: 60px;
-      margin-top: 12px;
-      border-radius: 7px;
-      background: #F0F0F0 center/cover no-repeat;
-      border: 1px solid var(--border);
+      width: 100%;
+      min-width: 100%;
+      background: #F0F0F0;
       overflow: hidden;
       cursor: pointer;
       user-select: none;
@@ -520,17 +526,11 @@
       bottom: 0;
       box-sizing: border-box;
       border-right: 1px solid var(--surface);
-      background: rgba(17,17,17,0.06);
-      transition: background 0.1s;
+      background-color: rgba(17,17,17,0.06);
+      transition: box-shadow 0.1s;
     }
-    .trim-seg.selected { background: rgba(17,17,17,0.16); box-shadow: inset 0 0 0 2px var(--text); }
-    .trim-seg.discarded {
-      background: repeating-linear-gradient(
-        45deg, rgba(201,42,42,0.12), rgba(201,42,42,0.12) 6px,
-        rgba(201,42,42,0.22) 6px, rgba(201,42,42,0.22) 12px
-      );
-    }
-    .trim-seg.discarded.selected { box-shadow: inset 0 0 0 2px var(--error); }
+    .trim-seg.selected { box-shadow: inset 0 0 0 2px var(--text); }
+    .preset.active { background: var(--text); color: #fff; border-color: var(--text); }
     .trim-handle {
       position: absolute;
       top: 0;
@@ -777,12 +777,24 @@
         <audio id="trim-audio" controls style="width:100%;display:none;margin-top:4px;"></audio>
         <div class="trim-timecode" id="trim-timecode">0:00.000</div>
 
-        <div class="trim-timeline" id="trim-timeline" onclick="trimTimelineClick(event)"></div>
+        <div style="display:flex;justify-content:flex-end;gap:4px;margin-top:10px;">
+          <span class="hint" style="margin-right:4px;">Zoom:</span>
+          <button class="preset trim-zoom-btn active" data-zoom="1" style="padding:3px 10px;" onclick="trimSetZoom(1)">1x</button>
+          <button class="preset trim-zoom-btn" data-zoom="2" style="padding:3px 10px;" onclick="trimSetZoom(2)">2x</button>
+          <button class="preset trim-zoom-btn" data-zoom="4" style="padding:3px 10px;" onclick="trimSetZoom(4)">4x</button>
+        </div>
+        <div class="trim-timeline-viewport" id="trim-timeline-viewport">
+          <div class="trim-timeline" id="trim-timeline" onclick="trimTimelineClick(event)"></div>
+        </div>
         <div class="hint" style="text-align:center;margin-top:6px;" id="trim-seg-hint">Load a file to begin</div>
 
         <div style="display:flex;gap:8px;margin-top:10px;">
-          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimSplit()">✂ Split at Playhead</button>
-          <button class="preset" id="trim-keep-toggle" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimToggleKeep()">Discard Segment</button>
+          <button class="preset" id="trim-razor-toggle" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimToggleRazor()">✂ Razor Tool: Off</button>
+          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimSplit()">Split at Playhead</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimDeleteSegment()">🗑 Delete Segment</button>
+          <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="trimUndo()">↩ Undo</button>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="preset" style="flex:1;padding:9px 8px;font-size:13px;" onclick="setTrimPoint('start')">⬅ Set as Start Time</button>
@@ -1212,13 +1224,19 @@ let _trSegsOrig = [];      // originals for reset
 let _trFilename = 'transcript.srt';
 let dragSrcIdx = null;
 
-// Trim timeline: segments always contiguous & chronological except for a
-// free-floating first-segment start / last-segment end (trimming dead
-// space at the head/tail without needing a stub segment for it).
+// Trim timeline: _trimSegments holds only what's kept (a real ripple
+// delete removes an entry entirely), each still in *source* time. The
+// displayed timeline packs them edge-to-edge by cumulative kept duration —
+// see trimDisplayLayout()/trimSourceTimeAtDisplayPct() for the source<->
+// display time conversion used everywhere clicks/drags happen.
 let _trimDuration = 0;
-let _trimSegments = [];    // [{start, end, keep}]
+let _trimSegments = [];    // [{start, end}] in source time, only kept content
 let _trimSelected = 0;
 let _trimDragBoundary = null;
+let _trimBgImageUrl = null;
+let _trimRazorMode = false;
+let _trimZoom = 1;
+let _trimUndoStack = [];
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(btn, tab) {
@@ -1354,27 +1372,26 @@ function onFile(input, tab) {
     _trimDuration = 0;
     _trimSegments = [];
     _trimSelected = 0;
-    const timeline = document.getElementById('trim-timeline');
-    timeline.style.backgroundImage = 'none';
-    timeline.innerHTML = '';
+    _trimUndoStack = [];
+    _trimBgImageUrl = null;
+    trimSetZoom(1);
+    document.getElementById('trim-timeline').innerHTML = '';
     document.getElementById('trim-seg-hint').textContent = 'Loading…';
 
     active.addEventListener('loadedmetadata', function onMeta() {
       active.removeEventListener('loadedmetadata', onMeta);
       _trimDuration = active.duration;
-      _trimSegments = [{ start: 0, end: _trimDuration, keep: true }];
+      _trimSegments = [{ start: 0, end: _trimDuration }];
       _trimSelected = 0;
       trimRender();
     });
 
-    if (isAudio) {
-      const wfForm = new FormData();
-      wfForm.append('video', f);
-      fetch('/trim/waveform', { method: 'POST', body: wfForm })
-        .then(r => r.ok ? r.blob() : Promise.reject())
-        .then(blob => { timeline.style.backgroundImage = `url(${URL.createObjectURL(blob)})`; })
-        .catch(() => {});
-    }
+    const bgForm = new FormData();
+    bgForm.append('video', f);
+    fetch(isAudio ? '/trim/waveform' : '/trim/thumbnails', { method: 'POST', body: bgForm })
+      .then(r => r.ok ? r.blob() : Promise.reject())
+      .then(blob => { _trimBgImageUrl = URL.createObjectURL(blob); trimRender(); })
+      .catch(() => {});
   }
 }
 
@@ -1422,6 +1439,52 @@ function setTrimPoint(point) {
 }
 
 // ── Trim timeline ────────────────────────────────────────────────────────
+// _trimSegments holds only kept content in source time. The two functions
+// below are the single place that converts between that and the *displayed*
+// (ripple'd, gap-free) timeline — every click/drag/render goes through them
+// so the source<->display math never gets duplicated or drifts.
+function trimTotalKeptDuration() {
+  return _trimSegments.reduce((sum, s) => sum + (s.end - s.start), 0);
+}
+
+function trimDisplayLayout() {
+  let cum = 0;
+  return _trimSegments.map(seg => {
+    const dur = seg.end - seg.start;
+    const entry = { left: cum, width: dur };
+    cum += dur;
+    return entry;
+  });
+}
+
+// display fraction (0-1 across the ripple'd timeline) -> { idx, sourceTime }
+function trimSourceTimeAtDisplayPct(pct) {
+  const total = trimTotalKeptDuration();
+  const layout = trimDisplayLayout();
+  const outputTime = Math.min(total, Math.max(0, pct * total));
+  for (let i = 0; i < _trimSegments.length; i++) {
+    const segStart = layout[i].left, segEnd = segStart + layout[i].width;
+    if (outputTime >= segStart && (outputTime <= segEnd || i === _trimSegments.length - 1)) {
+      return { idx: i, sourceTime: _trimSegments[i].start + (outputTime - segStart) };
+    }
+  }
+  return { idx: 0, sourceTime: 0 };
+}
+
+// source time -> display % (null if that source time is in a deleted gap)
+function trimDisplayPctAtSourceTime(t) {
+  const total = trimTotalKeptDuration();
+  if (!total) return null;
+  const layout = trimDisplayLayout();
+  for (let i = 0; i < _trimSegments.length; i++) {
+    const seg = _trimSegments[i];
+    if (t >= seg.start && t <= seg.end) {
+      return (layout[i].left + (t - seg.start)) / total * 100;
+    }
+  }
+  return null;
+}
+
 function trimSegAt(time) {
   for (let i = 0; i < _trimSegments.length; i++) {
     const s = _trimSegments[i];
@@ -1430,19 +1493,39 @@ function trimSegAt(time) {
   return Math.max(0, _trimSegments.length - 1);
 }
 
+function trimPushUndo() {
+  _trimUndoStack.push(_trimSegments.map(s => ({ ...s })));
+  if (_trimUndoStack.length > 20) _trimUndoStack.shift();
+}
+
+function trimUndo() {
+  if (!_trimUndoStack.length) return;
+  _trimSegments = _trimUndoStack.pop();
+  _trimSelected = Math.min(_trimSelected, _trimSegments.length - 1);
+  trimRender();
+}
+
 function trimRender() {
   const timeline = document.getElementById('trim-timeline');
-  const dur = _trimDuration || 1;
+  const total = trimTotalKeptDuration() || 1;
+  const layout = trimDisplayLayout();
   let html = '';
   _trimSegments.forEach((seg, i) => {
-    const left  = (seg.start / dur * 100).toFixed(3);
-    const width = ((seg.end - seg.start) / dur * 100).toFixed(3);
-    const cls = 'trim-seg' + (i === _trimSelected ? ' selected' : '') + (!seg.keep ? ' discarded' : '');
-    html += `<div class="${cls}" style="left:${left}%;width:${width}%" onclick="trimSelectSeg(event, ${i})"></div>`;
+    const leftPct  = (layout[i].left / total * 100).toFixed(3);
+    const widthPct = (layout[i].width / total * 100).toFixed(3);
+    const segDur = seg.end - seg.start;
+    let bgStyle = '';
+    if (_trimBgImageUrl && segDur > 0) {
+      const bgSize = (_trimDuration / segDur * 100).toFixed(3);
+      const bgPos  = (seg.start / segDur * 100).toFixed(3);
+      bgStyle = `background-image:url(${_trimBgImageUrl});background-size:${bgSize}% 100%;background-position:-${bgPos}% 0;`;
+    }
+    const cls = 'trim-seg' + (i === _trimSelected ? ' selected' : '');
+    html += `<div class="${cls}" style="left:${leftPct}%;width:${widthPct}%;${bgStyle}" onclick="trimSelectSeg(event, ${i})"></div>`;
   });
   for (let i = 1; i < _trimSegments.length; i++) {
-    const left = (_trimSegments[i].start / dur * 100).toFixed(3);
-    html += `<div class="trim-handle" style="left:${left}%" onpointerdown="trimHandleDown(event, ${i})"></div>`;
+    const leftPct = (layout[i].left / total * 100).toFixed(3);
+    html += `<div class="trim-handle" style="left:${leftPct}%" onpointerdown="trimHandleDown(event, ${i})"></div>`;
   }
   html += `<div class="trim-playhead" id="trim-playhead" style="left:0%"></div>`;
   timeline.innerHTML = html;
@@ -1452,10 +1535,12 @@ function trimRender() {
 }
 
 function trimTimelineClick(e) {
-  if (!_trimDuration) return;
+  if (!_trimDuration || !_trimSegments.length) return;
   const rect = e.currentTarget.getBoundingClientRect();
   const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  trimActiveMedia().currentTime = pct * _trimDuration;
+  const { idx, sourceTime } = trimSourceTimeAtDisplayPct(pct);
+  if (_trimRazorMode) trimCutAt(idx, sourceTime);
+  else trimActiveMedia().currentTime = sourceTime;
 }
 
 function trimSelectSeg(e, idx) {
@@ -1463,16 +1548,23 @@ function trimSelectSeg(e, idx) {
   const timeline = document.getElementById('trim-timeline');
   const rect = timeline.getBoundingClientRect();
   const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const result = trimSourceTimeAtDisplayPct(pct);
+  if (_trimRazorMode) { trimCutAt(result.idx, result.sourceTime); return; }
   _trimSelected = idx;
-  trimActiveMedia().currentTime = pct * _trimDuration;
+  trimActiveMedia().currentTime = result.sourceTime;
   trimRender();
 }
 
 function trimUpdatePlayhead() {
   const ph = document.getElementById('trim-playhead');
   if (!ph || !_trimDuration) return;
-  const pct = Math.min(100, Math.max(0, trimActiveMedia().currentTime / _trimDuration * 100));
-  ph.style.left = pct + '%';
+  const pct = trimDisplayPctAtSourceTime(trimActiveMedia().currentTime);
+  if (pct === null) {
+    ph.style.display = 'none';
+  } else {
+    ph.style.display = '';
+    ph.style.left = Math.min(100, Math.max(0, pct)) + '%';
+  }
 }
 
 function trimUpdateFields() {
@@ -1484,32 +1576,53 @@ function trimUpdateFields() {
 
 function trimUpdateHint() {
   const seg = _trimSegments[_trimSelected];
-  const hint   = document.getElementById('trim-seg-hint');
-  const toggle = document.getElementById('trim-keep-toggle');
+  const hint = document.getElementById('trim-seg-hint');
   if (!seg) { hint.textContent = 'Load a file to begin'; return; }
   hint.textContent = `Segment ${_trimSelected + 1} of ${_trimSegments.length} selected · ` +
-    `${fmtTimecode(seg.start)} – ${fmtTimecode(seg.end)} · ${seg.keep ? 'kept' : 'discarded'}`;
-  toggle.textContent = seg.keep ? 'Discard Segment' : 'Restore Segment';
+    `${fmtTimecode(seg.start)} – ${fmtTimecode(seg.end)}`;
+}
+
+// Cuts segment[idx] at an exact source time — shared by the razor tool
+// (click-driven) and the Split-at-Playhead button (playhead-driven).
+function trimCutAt(idx, sourceTime) {
+  const seg = _trimSegments[idx];
+  if (!seg || sourceTime <= seg.start + 0.05 || sourceTime >= seg.end - 0.05) return;
+  trimPushUndo();
+  const newSeg = { start: sourceTime, end: seg.end };
+  seg.end = sourceTime;
+  _trimSegments.splice(idx + 1, 0, newSeg);
+  _trimSelected = idx;
+  trimActiveMedia().currentTime = sourceTime;
+  trimRender();
 }
 
 function trimSplit() {
   if (!_trimSegments.length) return;
   const time = trimActiveMedia().currentTime;
-  const idx = trimSegAt(time);
-  const seg = _trimSegments[idx];
-  if (time <= seg.start + 0.05 || time >= seg.end - 0.05) return;
-  const newSeg = { start: time, end: seg.end, keep: seg.keep };
-  seg.end = time;
-  _trimSegments.splice(idx + 1, 0, newSeg);
-  _trimSelected = idx;
+  trimCutAt(trimSegAt(time), time);
+}
+
+function trimDeleteSegment() {
+  if (_trimSegments.length <= 1) { alert('Keep at least one segment.'); return; }
+  trimPushUndo();
+  _trimSegments.splice(_trimSelected, 1);
+  _trimSelected = Math.min(_trimSelected, _trimSegments.length - 1);
   trimRender();
 }
 
-function trimToggleKeep() {
-  const seg = _trimSegments[_trimSelected];
-  if (!seg) return;
-  seg.keep = !seg.keep;
-  trimRender();
+function trimToggleRazor() {
+  _trimRazorMode = !_trimRazorMode;
+  const btn = document.getElementById('trim-razor-toggle');
+  btn.classList.toggle('active', _trimRazorMode);
+  btn.textContent = _trimRazorMode ? '✂ Razor Tool: On' : '✂ Razor Tool: Off';
+  document.getElementById('trim-timeline').style.cursor = _trimRazorMode ? 'crosshair' : 'pointer';
+}
+
+function trimSetZoom(z) {
+  _trimZoom = z;
+  document.getElementById('trim-timeline').style.width = (z * 100) + '%';
+  document.querySelectorAll('.trim-zoom-btn').forEach(b =>
+    b.classList.toggle('active', parseFloat(b.dataset.zoom) === z));
 }
 
 // Moves the cut point shared by segments[boundaryIdx-1] and
@@ -1533,6 +1646,8 @@ function trimApplyFields() {
   if (newStart === null) newStart = seg.start;
   if (newEnd   === null) newEnd   = seg.end;
 
+  trimPushUndo();
+
   if (idx === 0) {
     seg.start = Math.max(0, Math.min(newStart, seg.end - 0.1));
   } else {
@@ -1551,6 +1666,7 @@ function trimApplyFields() {
 function trimHandleDown(e, boundaryIdx) {
   e.preventDefault();
   e.stopPropagation();
+  trimPushUndo();
   _trimDragBoundary = boundaryIdx;
   document.addEventListener('pointermove', trimHandleMove);
   document.addEventListener('pointerup', trimHandleUp);
@@ -1561,7 +1677,8 @@ function trimHandleMove(e) {
   const timeline = document.getElementById('trim-timeline');
   const rect = timeline.getBoundingClientRect();
   const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  trimSetBoundary(_trimDragBoundary, pct * _trimDuration);
+  const { sourceTime } = trimSourceTimeAtDisplayPct(pct);
+  trimSetBoundary(_trimDragBoundary, sourceTime);
   trimRender();
 }
 
@@ -1766,10 +1883,9 @@ function submit(tab, isPreview = false) {
   } else if (tab === 'trim') {
     const file = document.getElementById('f-trim').files[0];
     if (!file) return alert('Please select a video first.');
-    const kept = _trimSegments.filter(s => s.keep).map(({ start, end }) => ({ start, end }));
-    if (!kept.length) return alert('Please keep at least one segment.');
+    if (!_trimSegments.length) return alert('Please keep at least one segment.');
     form.append('video', file);
-    form.append('segments', JSON.stringify(kept));
+    form.append('segments', JSON.stringify(_trimSegments.map(({ start, end }) => ({ start, end }))));
 
   } else if (tab === 'merge') {
     if (mergeFiles.length < 2) return alert('Please select at least 2 videos.');

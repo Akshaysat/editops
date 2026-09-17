@@ -467,6 +467,42 @@ def trim_waveform_route():
     return send_file(output_path, mimetype='image/png')
 
 
+@app.route('/trim/thumbnails', methods=['POST'])
+def trim_thumbnails_route():
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    input_path, uid = save_upload(file)
+    info = ffprobe_info(input_path)
+    duration = info['duration'] if info else 0
+
+    if not info or not info['has_video'] or duration <= 0:
+        cleanup_later(input_path)
+        return jsonify(error='No video stream to generate thumbnails from.'), 400
+
+    output_path = os.path.join(TEMP_DIR, f'vt_thumbs_{uid}.png')
+
+    # A sprite of evenly-spaced frames tiled horizontally — used as the
+    # timeline background the same way /trim/waveform is, just for video.
+    # Sized generously (80 frames across a virtual 3200px timeline) so it
+    # still looks reasonable at 2x zoom instead of blocky.
+    n = 80
+    thumb_w, thumb_h = 40, 100
+    r = subprocess.run(
+        ['ffmpeg', '-y', '-i', input_path,
+         '-vf', f'fps={n / duration},scale={thumb_w}:{thumb_h},tile={n}x1',
+         '-frames:v', '1', output_path],
+        capture_output=True)
+    cleanup_later(input_path)
+
+    if r.returncode != 0:
+        return jsonify(error='Could not generate thumbnails.'), 500
+
+    cleanup_later(output_path)
+    return send_file(output_path, mimetype='image/png')
+
+
 @app.route('/merge', methods=['POST'])
 def merge_route():
     files = request.files.getlist('videos')
