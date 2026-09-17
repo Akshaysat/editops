@@ -1684,6 +1684,21 @@ def _parse_gemini_json(response):
     return json.loads(raw)
 
 
+
+# ISO 639-1 -> readable name, for the languages offered in the Transcribe
+# dropdown. Used so the Gemini prompt reads naturally ("language is Odia")
+# instead of interpolating a raw code ("language is or" — which for Odia
+# would otherwise literally read as the English word "or" mid-sentence).
+LANGUAGE_NAMES = {
+    'en': 'English', 'hi': 'Hindi', 'mr': 'Marathi', 'gu': 'Gujarati',
+    'ta': 'Tamil', 'te': 'Telugu', 'kn': 'Kannada', 'ml': 'Malayalam',
+    'pa': 'Punjabi', 'or': 'Odia', 'es': 'Spanish', 'fr': 'French',
+    'de': 'German', 'pt': 'Portuguese', 'ja': 'Japanese', 'zh': 'Chinese',
+    'ar': 'Arabic', 'ru': 'Russian', 'ko': 'Korean', 'it': 'Italian',
+    'nl': 'Dutch', 'tr': 'Turkish',
+}
+
+
 def gemini_transcribe(wav_path, language=None, romanize=False):
     """Transcribe via the Gemini API. Returns (segments, detected_language).
 
@@ -1696,7 +1711,7 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     client = _gemini_client()
     uploaded = client.files.upload(file=wav_path)
 
-    lang_hint = f' The spoken language is {language}.' if language else ''
+    lang_hint = f' The spoken language is {LANGUAGE_NAMES.get(language, language)}.' if language else ''
     script_instruction = (
         ' Any Hindi/Urdu (or other non-Latin-script) speech must be written '
         'in casual Roman-script transliteration the way people actually type '
@@ -1779,6 +1794,13 @@ def transcribe_route():
     language = request.form.get('language') or None
     romanize = request.form.get('romanize') == '1'
     model    = request.form.get('model') or 'whisper'
+
+    # Odia isn't in local Whisper's supported language set (checked against
+    # whisper.tokenizer.LANGUAGES) — fail fast with a clear message rather
+    # than letting Whisper's own exception surface as a generic task error.
+    if model == 'whisper' and language == 'or':
+        return jsonify(error='Odia isn\'t supported by local Whisper. Select the Gemini model instead.'), 400
+
     input_path, uid = save_upload(file, fallback_ext='.mp4')
     original_stem = stem(file.filename)
     _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}

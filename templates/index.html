@@ -847,10 +847,18 @@
 
       <div class="field">
         <label>Language</label>
-        <select id="tr-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+        <select id="tr-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;" onchange="onTranscribeLangChange()">
           <option value="">Auto-detect</option>
           <option value="en">English</option>
           <option value="hi">Hindi</option>
+          <option value="mr">Marathi</option>
+          <option value="gu">Gujarati</option>
+          <option value="ta">Tamil</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+          <option value="pa">Punjabi</option>
+          <option value="or">Odia (Gemini only — not supported by local Whisper)</option>
           <option value="es">Spanish</option>
           <option value="fr">French</option>
           <option value="de">German</option>
@@ -1669,6 +1677,15 @@ function onTranscribeModelChange() {
   const model = document.getElementById('tr-model').value;
   document.getElementById('tr-hint-whisper').style.display = model === 'gemini' ? 'none' : 'block';
   document.getElementById('tr-hint-gemini').style.display  = model === 'gemini' ? 'block' : 'none';
+}
+
+// Odia isn't in local Whisper's supported language set — force Gemini so a
+// pick here doesn't fail at submit time.
+function onTranscribeLangChange() {
+  if (document.getElementById('tr-lang').value === 'or') {
+    document.getElementById('tr-model').value = 'gemini';
+    onTranscribeModelChange();
+  }
 }
 
 function submitTranscribe() {
