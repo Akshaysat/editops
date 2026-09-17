@@ -2690,48 +2690,16 @@ function pollDubAudio(taskId, startTime) {
 
     if (data.status === 'done') {
       const url = `/translate-dub/result/${taskId}`;
-      let html =
+      document.getElementById('td-audio-result').innerHTML =
         `<div class="result-title">✓ Dubbed audio ready.</div>` +
         `<div class="tr-player-wrap"><audio src="${url}" controls></audio></div>` +
         `<a class="download-btn" href="${url}" download="translated_audio.mp3">⬇ Download translated_audio.mp3</a>`;
-      if (data.has_bg_music) {
-        html +=
-          `<button class="btn-secondary" id="td-addmusic-btn" style="margin-top:10px;" onclick="addBackgroundMusic('${taskId}')">🎵 Add Background Music</button>` +
-          `<div id="td-music-result" style="margin-top:10px;"></div>`;
-      }
-      document.getElementById('td-audio-result').innerHTML = html;
     } else {
       const eb = document.getElementById('eb-tdaudio');
       eb.textContent = '✕ ' + (data.error || 'Audio generation failed.');
       eb.classList.add('visible');
     }
   }, 2000);
-}
-
-function addBackgroundMusic(taskId) {
-  const btn = document.getElementById('td-addmusic-btn');
-  const resultBox = document.getElementById('td-music-result');
-  if (btn) { btn.disabled = true; btn.textContent = 'Mixing…'; }
-
-  fetch(`/translate-dub/add-music/${taskId}`, { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.error) {
-        if (btn) { btn.disabled = false; btn.textContent = '🎵 Add Background Music'; }
-        resultBox.innerHTML = `<div class="error-box visible">✕ ${escHtml(data.error)}</div>`;
-        return;
-      }
-      const url = `/translate-dub/result-with-music/${taskId}`;
-      if (btn) btn.remove();
-      resultBox.innerHTML =
-        `<div class="result-title">✓ Background music added.</div>` +
-        `<div class="tr-player-wrap"><audio src="${url}" controls></audio></div>` +
-        `<a class="download-btn" href="${url}" download="translated_audio_with_music.mp3">⬇ Download with music</a>`;
-    })
-    .catch(() => {
-      if (btn) { btn.disabled = false; btn.textContent = '🎵 Add Background Music'; }
-      resultBox.innerHTML = `<div class="error-box visible">✕ Network error — is the server running?</div>`;
-    });
 }
 
 // ── Titles & Description ─────────────────────────────────────────────────
