@@ -2472,6 +2472,32 @@ def _stitch_audio_segments(clip_paths, gap_durations, out_path):
         except Exception: pass
 
 
+def _group_segments_into_runs(kept, max_chars=4000):
+    """Group consecutive same-speaker segments into runs, each destined
+    to become a single TTS call — see elevenlabs_tts() for why merging
+    helps flow continuity. A speaker change always starts a new run,
+    since it needs a different cloned voice — and so does crossing
+    `max_chars`, kept safely under eleven_v3's hard 5,000-character-per-
+    request limit (verified against ElevenLabs' docs). Without this cap,
+    a long uninterrupted speaker turn on a real full-length video can
+    exceed the limit and get silently cut off rather than erroring — the
+    dub just stops partway through with no error, which real testing
+    surfaced. Returns a list of segment lists."""
+    runs, run_lens = [], []
+    for seg in kept:
+        tag = EMOTION_AUDIO_TAGS.get(seg.get('emotion'), '')
+        seg_len = len(seg['text']) + (len(tag) + 1 if tag else 0)
+        same_speaker = runs and runs[-1][-1].get('speaker') == seg.get('speaker')
+        fits = same_speaker and run_lens[-1] + 1 + seg_len <= max_chars
+        if fits:
+            runs[-1].append(seg)
+            run_lens[-1] += 1 + seg_len
+        else:
+            runs.append([seg])
+            run_lens.append(seg_len)
+    return runs
+
+
 @app.route('/translate-dub', methods=['POST'])
 def translate_dub_route():
     file = request.files.get('file')
@@ -2590,19 +2616,7 @@ def translate_dub_generate_audio(task_id):
         clip_paths = []
         try:
             kept = [s for s in edited_segments if (s.get('text') or '').strip()]
-
-            # Group consecutive same-speaker segments into one run each —
-            # a run becomes a single TTS call, so the model generates one
-            # continuous performance instead of many separately-generated
-            # clips stitched together. See elevenlabs_tts() for why. A
-            # speaker change is the only place a new run is forced, since
-            # it needs a different cloned voice.
-            runs = []
-            for seg in kept:
-                if runs and runs[-1][-1].get('speaker') == seg.get('speaker'):
-                    runs[-1].append(seg)
-                else:
-                    runs.append([seg])
+            runs = _group_segments_into_runs(kept)
 
             for i, run_segs in enumerate(runs):
                 task['progress'] = f'Generating speech… ({i + 1}/{len(runs)})'
