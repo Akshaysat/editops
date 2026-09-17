@@ -363,14 +363,31 @@ def trim_route():
 
     input_path, uid = save_upload(file)
 
-    start = request.form.get('start', '').strip()
-    end   = request.form.get('end', '').strip()
-
-    if not start and not end:
+    try:
+        segments = json.loads(request.form.get('segments', '[]'))
+    except (ValueError, TypeError):
         os.remove(input_path)
-        return jsonify(error='Please provide a start time, end time, or both.'), 400
+        return jsonify(error='Invalid segments data.'), 400
+
+    if not segments:
+        os.remove(input_path)
+        return jsonify(error='Please keep at least one segment.'), 400
 
     info = ffprobe_info(input_path)
+    duration = info['duration'] if info else None
+
+    cleaned = []
+    for seg in segments:
+        try:
+            s, e = float(seg['start']), float(seg['end'])
+        except (KeyError, TypeError, ValueError):
+            os.remove(input_path)
+            return jsonify(error='Invalid segment data.'), 400
+        if s < 0 or e <= s or (duration and e > duration + 0.5):
+            os.remove(input_path)
+            return jsonify(error='Segment times are out of range.'), 400
+        cleaned.append((s, e))
+
     if info and not info['has_video']:
         out_ext = os.path.splitext(file.filename)[1] or '.mp3'
     else:
@@ -378,26 +395,76 @@ def trim_route():
 
     output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{out_ext}')
 
-    cmd = ['ffmpeg', '-y']
-    if start:
-        cmd += ['-ss', start]
-    cmd += ['-i', input_path]
-    if end:
-        cmd += ['-to', end]
     # Explicit mapping — see /convert for why: implicit stream selection can
     # silently drop audio on some source files (e.g. no track flagged as
     # the "default" one).
-    cmd += ['-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', output_path]
+    def extract(start, end, out_path):
+        cmd = ['ffmpeg', '-y', '-ss', str(start), '-i', input_path, '-to', str(end - start),
+               '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', out_path]
+        return subprocess.run(cmd, capture_output=True)
 
-    r = subprocess.run(cmd, capture_output=True)
+    if len(cleaned) == 1:
+        r = extract(cleaned[0][0], cleaned[0][1], output_path)
+        if r.returncode != 0:
+            cleanup_later(input_path)
+            return jsonify(error='Trim failed.'), 500
+    else:
+        segment_paths = []
+        for i, (s, e) in enumerate(cleaned):
+            seg_path = os.path.join(TEMP_DIR, f'vt_trimseg_{uid}_{i}{out_ext}')
+            r = extract(s, e, seg_path)
+            if r.returncode != 0:
+                cleanup_later(input_path)
+                for p in segment_paths:
+                    cleanup_later(p)
+                return jsonify(error='Trim failed.'), 500
+            segment_paths.append(seg_path)
+
+        concat_path = os.path.join(TEMP_DIR, f'vt_trimconcat_{uid}.txt')
+        with open(concat_path, 'w') as fh:
+            for p in segment_paths:
+                fh.write(f"file '{p}'\n")
+
+        # Stream-copy concat is safe here (unlike /merge) because every
+        # segment was cut from the same source file, so codec params match.
+        r = subprocess.run(
+            ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+             '-c', 'copy', output_path],
+            capture_output=True)
+        for p in segment_paths:
+            cleanup_later(p)
+        cleanup_later(concat_path)
+        if r.returncode != 0:
+            cleanup_later(input_path)
+            return jsonify(error='Trim failed.'), 500
+
     cleanup_later(input_path)
-
-    if r.returncode != 0:
-        return jsonify(error='Trim failed.'), 500
-
     cleanup_later(output_path)
     return send_file(output_path, as_attachment=True,
                      download_name=f'{stem(file.filename)}_trimmed{out_ext}')
+
+
+@app.route('/trim/waveform', methods=['POST'])
+def trim_waveform_route():
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    input_path, uid = save_upload(file)
+    output_path = os.path.join(TEMP_DIR, f'vt_waveform_{uid}.png')
+
+    r = subprocess.run(
+        ['ffmpeg', '-y', '-i', input_path,
+         '-filter_complex', 'aformat=channel_layouts=mono,showwavespic=s=1600x100:colors=0x8A8A8A',
+         '-frames:v', '1', output_path],
+        capture_output=True)
+    cleanup_later(input_path)
+
+    if r.returncode != 0:
+        return jsonify(error='Could not generate waveform.'), 500
+
+    cleanup_later(output_path)
+    return send_file(output_path, mimetype='image/png')
 
 
 @app.route('/merge', methods=['POST'])
