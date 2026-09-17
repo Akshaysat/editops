@@ -11,7 +11,8 @@ except ImportError:
 # Each teammate provides their own key locally in a gitignored .env file
 # (GEMINI_API_KEY=...) — never commit this, unlike the Supabase anon key
 # above which is safe to embed because it's gated by RLS, not secrecy.
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_API_KEY      = os.environ.get('GEMINI_API_KEY')
+ELEVENLABS_API_KEY  = os.environ.get('ELEVENLABS_API_KEY')
 
 _tasks = {}   # task_id → {status, progress, result, filename, error}
 
@@ -1861,9 +1862,7 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     # This model gets the real audio, not just text, so it can identify
     # distinct voices directly — no separate diarization system needed.
     # Verified deterministic (2 repeat runs on the same clip matched
-    # exactly) and, on a real 4-speaker clip, more accurate than
-    # gemini_transcribe_dedicated's own native diarization, which
-    # undercounted the same clip at 3 speakers.
+    # exactly and correctly found all 4 speakers on a real clip).
     speaker_instruction = (
         ' Identify each distinct speaker by their voice and include a '
         '"speaker" field on every object naming which speaker is talking '
@@ -1897,8 +1896,7 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     ]
 
     # Only label speakers when more than one was actually detected, so a
-    # single-speaker video's output looks identical to before this was
-    # added — same rule gemini_transcribe_dedicated uses.
+    # single-speaker video's output looks identical to before this was added.
     speaker_order = []
     for s in segs:
         if s['_speaker'] and s['_speaker'] not in speaker_order:
@@ -1911,104 +1909,6 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
         s.pop('_speaker', None)
 
     return segs, (language or '')
-
-
-def _parse_gemini_offset(s):
-    """'7.2s' -> 7.2. gemini-3.5-transcribe reports word timestamps as
-    strings with a trailing 's', not plain numbers like the rest of the API."""
-    return float(s.rstrip('s')) if s else 0.0
-
-
-def gemini_transcribe_dedicated(wav_path, language=None, romanize=False):
-    """Transcribe via Gemini's dedicated transcription model
-    (gemini-3.5-transcribe). Returns (segments, detected_language).
-
-    Unlike gemini_transcribe(), this is a config-driven endpoint, not a
-    prompt-driven one — it has real forced-alignment word timestamps (each
-    segment's start/end comes from its first/last word's actual timing, not
-    the model "reading back" timestamps off its own generated text) and
-    native speaker diarization. It has no script/romanization control at
-    all, so romanize is applied as a separate cleanup pass via
-    gemini_romanize_segments(), same as the Whisper fallback path uses.
-    """
-    from google.genai import types
-
-    client = _gemini_client()
-    uploaded = client.files.upload(file=wav_path)
-
-    # custom_vocabulary is rejected outright when word_timestamp is on
-    # ("custom_vocabulary is incompatible with word timestamps") — verified
-    # against the live API. Timestamps are what this segments/SRT feature
-    # actually needs, so vocabulary biasing isn't usable here.
-    #
-    # language_codes is a hard filter, not a hint, and every option here has
-    # a real failure mode — verified against the live API on two clips (a
-    # short synthetic Hindi+English splice, and a full 110s real Hindi
-    # conversation with a couple of English asides):
-    #   - [language] (e.g. ['hi']): on the real conversation this captured
-    #     the entire multi-speaker exchange correctly in Devanagari, but
-    #     dropped a few short fully-English lines entirely. On the
-    #     synthetic clip it kept the English line but force-decoded it
-    #     phonetically into Devanagari garbage instead of English text.
-    #   - None (auto-detect): on the real conversation this dropped ~80%
-    #     of the transcript (the entire middle of the conversation) and
-    #     rendered what little Hindi it did keep in Roman script instead
-    #     of Devanagari — a much worse loss than a few missing lines.
-    #   - [language, 'en']: same large-scale content loss as auto-detect.
-    # [language] alone is the best of these for real content: it reliably
-    # captures the bulk of a single-primary-language conversation, at the
-    # cost of occasionally mishandling a short other-language aside. For
-    # audio that's heavily code-switched throughout, the regular Gemini
-    # model (gemini_transcribe, prompt-driven) handles that far better —
-    # steer users there instead of trying to fix this via config alone.
-    config = types.GenerateContentConfig(
-        audio_transcription_config=types.AudioTranscriptionConfig(
-            word_timestamp=True,
-            diarization=True,
-            language_codes=[language] if language else None,
-        )
-    )
-    response = client.models.generate_content(
-        model='gemini-3.5-transcribe',
-        contents=[uploaded],
-        config=config,
-    )
-
-    detected_language = language or ''
-    speaker_order = []
-    segs = []
-    for part in response.candidates[0].content.parts:
-        t = getattr(part, 'audio_transcription', None)
-        if not t or not t.words:
-            continue
-        text = (t.text or '').strip()
-        if not text:
-            continue
-        if t.language_code and not detected_language:
-            detected_language = t.language_code
-        if t.speaker_label and t.speaker_label not in speaker_order:
-            speaker_order.append(t.speaker_label)
-        segs.append({
-            'start': _parse_gemini_offset(t.words[0].start_offset),
-            'end':   _parse_gemini_offset(t.words[-1].end_offset),
-            'text':  text,
-            '_speaker': t.speaker_label,
-        })
-
-    # Only label speakers when more than one was actually detected, so a
-    # single-speaker video's output looks identical to the other models'.
-    if len(speaker_order) > 1:
-        names = {spk: f'Speaker {i + 1}' for i, spk in enumerate(speaker_order)}
-        for s in segs:
-            if s['_speaker']:
-                s['text'] = f"{names[s['_speaker']]}: {s['text']}"
-    for s in segs:
-        s.pop('_speaker', None)
-
-    if romanize:
-        segs = gemini_romanize_segments(segs)
-
-    return segs, detected_language
 
 
 def gemini_romanize_segments(segs):
@@ -2044,12 +1944,9 @@ def gemini_romanize_segments(segs):
 def gemini_enforce_keywords_english(segs, keywords):
     """Rewrite any of `keywords` that ended up translated or transliterated
     in `segs` back to their exact English spelling. Runs as a fixup pass
-    after transcription, applied the same way regardless of which of the
-    three transcription backends produced `segs` — including
-    gemini-3.5-transcribe, whose config-driven API has no prompt field to
-    steer at generation time, so a post-pass is the only mechanism that
-    reaches it. Returns a new list; raises on failure so the caller can
-    decide how to fall back.
+    after transcription, applied the same way regardless of which
+    transcription backend produced `segs`. Returns a new list; raises on
+    failure so the caller can decide how to fall back.
     """
     client = _gemini_client()
     keyword_list = ', '.join(f'"{k}"' for k in keywords)
@@ -2073,6 +1970,216 @@ def gemini_enforce_keywords_english(segs, keywords):
     if len(parsed) != len(segs):
         raise ValueError('Gemini keyword-enforcement returned a different number of lines than sent.')
     return [{**s, 'text': str(t).strip()} for s, t in zip(segs, parsed)]
+
+
+# ── Translate & Dub ──────────────────────────────────────────────────────────
+#
+# Pipeline: source video -> (Gemini) transcribe + diarize + translate +
+# classify each line's emotional delivery, in one multimodal call, since
+# Gemini hears the real audio and can judge tone/energy directly rather than
+# guessing from text -> user reviews/edits the translated transcript ->
+# once locked, (ElevenLabs) generate speech per line with a voice cloned
+# from the original speaker, with an inline Audio Tag driving that line's
+# emotional delivery. Lip-syncing the result onto the source video is a
+# separate, later step (not built here).
+
+# Mapping from Gemini's emotion classification to an Eleven v3 inline
+# Audio Tag (e.g. "[excited]") prepended to the line's text. This replaces
+# an earlier version that drove emotion through voice_settings' numeric
+# stability/style sliders on the older eleven_multilingual_v2 model — that
+# approach was tested against a real client video and sounded bad: low
+# stability combined with high style produces unstable, artifact-prone
+# delivery, especially on an Instant Voice Clone. v3's audio tags are the
+# mechanism ElevenLabs actually built for this, and work with IVC voices.
+EMOTION_AUDIO_TAGS = {
+    'neutral':     '',
+    'calm':        '[calmly]',
+    'happy':       '[happily]',
+    'excited':     '[excited]',
+    'urgent':      '[urgently]',
+    'sad':         '[sad]',
+    'angry':       '[angry]',
+    'questioning': '[curious]',
+    'reassuring':  '[reassuringly]',
+    'sarcastic':   '[sarcastically]',
+}
+
+
+def _elevenlabs_headers():
+    if not ELEVENLABS_API_KEY:
+        raise ValueError(
+            'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to a .env '
+            'file in the project root (get one from https://elevenlabs.io).'
+        )
+    return {'xi-api-key': ELEVENLABS_API_KEY}
+
+
+def _elevenlabs_call(req, timeout=60):
+    """Run an ElevenLabs request, surfacing the API's own error message
+    (in the response body) instead of a bare HTTP status on failure."""
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors='replace')
+        raise ValueError(f'ElevenLabs API error ({e.code}): {body[:300]}') from e
+
+
+def elevenlabs_clone_voice(sample_path, name):
+    """Create an Instant Voice Clone from a short audio sample. Returns the
+    new voice_id. Raises on failure.
+
+    remove_background_noise=true runs ElevenLabs' own Voice Isolator model
+    on the sample before cloning — without it, background music under the
+    speaker in the source video gets cloned as part of the "voice" itself
+    (echo-y, musical artifacts in the generated speech), since
+    extract_speaker_sample() cuts straight from the source audio with no
+    separation of its own.
+    """
+    boundary = uuid.uuid4().hex
+    with open(sample_path, 'rb') as f:
+        audio_bytes = f.read()
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n{name}\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="remove_background_noise"\r\n\r\ntrue\r\n'
+        f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="sample.wav"\r\n'
+        f'Content-Type: audio/wav\r\n\r\n'
+    ).encode() + audio_bytes + f'\r\n--{boundary}--\r\n'.encode()
+
+    req = urllib.request.Request(
+        'https://api.elevenlabs.io/v1/voices/add',
+        data=body,
+        method='POST',
+        headers={
+            **_elevenlabs_headers(),
+            'Content-Type': f'multipart/form-data; boundary={boundary}',
+        },
+    )
+    return json.loads(_elevenlabs_call(req, timeout=120))['voice_id']
+
+
+def elevenlabs_tts(text, voice_id, emotion, out_path):
+    """Generate speech for `text` in the given voice on Eleven v3, with an
+    inline Audio Tag from EMOTION_AUDIO_TAGS (e.g. "[excited]") prepended
+    to drive delivery — v3's actual mechanism for this. `stability` is
+    fixed at 0.5 ("Natural" — v3 only takes 0/0.5/1.0, not a continuous
+    slider like v2) so it stays responsive to the tag rather than fighting
+    it: 0 ("Creative") is prone to hallucinating extra words, 1.0
+    ("Robust") is documented as less responsive to directional prompts —
+    i.e. it would mute the very tag this function relies on. Writes mp3
+    bytes to out_path. Raises on failure."""
+    tag = EMOTION_AUDIO_TAGS.get(emotion, '')
+    tagged_text = f'{tag} {text}'.strip() if tag else text
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}',
+        data=json.dumps({
+            'text': tagged_text,
+            'model_id': 'eleven_v3',
+            'voice_settings': {
+                'stability': 0.5,
+                'similarity_boost': 0.75,
+                'use_speaker_boost': True,
+            },
+        }).encode(),
+        method='POST',
+        headers={**_elevenlabs_headers(), 'Content-Type': 'application/json'},
+    )
+    audio = _elevenlabs_call(req, timeout=60)
+    with open(out_path, 'wb') as f:
+        f.write(audio)
+
+
+def extract_speaker_sample(wav_path, segments, speaker, out_path, max_duration=90.0):
+    """Concatenate up to `max_duration` seconds of `speaker`'s lines from
+    wav_path into a single clip at out_path, for voice cloning — more
+    sample audio gives ElevenLabs a better clone than a single short line.
+    `speaker` may be None to mean "use the whole track" (single-speaker
+    audio, nothing to filter by). Returns True if a sample was written."""
+    segs = [s for s in segments if s.get('speaker') == speaker] if speaker else segments
+    if not segs:
+        return False
+
+    inputs, filter_labels, total = [], [], 0.0
+    for s in segs:
+        if total >= max_duration:
+            break
+        take = min(s['end'] - s['start'], max_duration - total)
+        if take <= 0:
+            continue
+        inputs += ['-ss', str(s['start']), '-t', str(take), '-i', wav_path]
+        filter_labels.append(f'[{len(filter_labels)}:a]')
+        total += take
+    if not filter_labels:
+        return False
+
+    filter_complex = ''.join(filter_labels) + f'concat=n={len(filter_labels)}:v=0:a=1[out]'
+    subprocess.run(
+        ['ffmpeg', '-y', *inputs, '-filter_complex', filter_complex, '-map', '[out]', out_path],
+        capture_output=True
+    )
+    return os.path.exists(out_path)
+
+
+def gemini_translate_with_emotion(wav_path, target_language, source_language=None):
+    """Transcribe, diarize, translate, and classify emotional delivery in
+    one multimodal call — Gemini hears the real audio, so it judges
+    delivery (tone/pace/energy) directly instead of guessing from text.
+    Returns a list of segment dicts: {start, end, speaker, source_text,
+    text, emotion}. Raises on failure."""
+    client = _gemini_client()
+    uploaded = client.files.upload(file=wav_path)
+
+    source_hint = (
+        f' The source audio is primarily in {LANGUAGE_NAMES.get(source_language, source_language)}.'
+        if source_language else ''
+    )
+    target_name = LANGUAGE_NAMES.get(target_language, target_language)
+    emotion_list = ', '.join(EMOTION_AUDIO_TAGS.keys())
+
+    prompt = (
+        'Listen to this audio. For each natural sentence or phrase, in order, '
+        'from start to finish:' + source_hint +
+        ' 1) Transcribe it in its original language and script. '
+        f'2) Translate it into natural, conversational {target_name}, in '
+        f'{target_name}\'s own native script — the way a native speaker '
+        'would actually say it, not a stiff literal translation. '
+        'EXCEPTION: any word or phrase that was actually spoken in English '
+        'in the source audio — including common English loanwords used '
+        'casually mid-sentence, e.g. "mutual fund", "trip", "hotel" — must '
+        'stay in English in the translation too, written in Latin letters '
+        'exactly as spoken. Do not translate it into a native '
+        f'{target_name} equivalent and do not transliterate it into '
+        f'{target_name}\'s script — only words that were genuinely spoken '
+        f'in {target_name} (or the source language) get translated/written '
+        'in the native script; English stays English. '
+        '3) Identify which distinct speaker is talking by voice, labeled '
+        'consistently as "Speaker 1", "Speaker 2" etc. in order of first '
+        'appearance (omit this field if you can only detect one speaker). '
+        '4) Classify the emotional delivery of that line from how it '
+        f'actually sounds — tone, pace, energy — as exactly one of: '
+        f'{emotion_list}. '
+        'Return ONLY a JSON array (no markdown, no commentary) of objects '
+        'with keys "start" (seconds, number), "end" (seconds, number), '
+        '"speaker" (string, optional), "source_text" (string), "text" '
+        f'(string, the {target_name} translation), and "emotion" (string, '
+        'one of the list above).'
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[uploaded, prompt],
+    )
+    parsed = _parse_gemini_json(response)
+    return [
+        {
+            'start': float(s['start']),
+            'end': float(s['end']),
+            'speaker': (s.get('speaker') or '').strip() or None,
+            'source_text': (s.get('source_text') or '').strip(),
+            'text': (s.get('text') or '').strip(),
+            'emotion': (s.get('emotion') or 'neutral').strip().lower(),
+        }
+        for s in parsed
+    ]
 
 
 def segments_to_srt(segments):
@@ -2130,9 +2237,6 @@ def transcribe_route():
                 segs, detected_language = gemini_transcribe(wav_path, language, romanize)
                 # Gemini already wrote the requested script directly — no
                 # separate romanization pass needed for this path.
-            elif model == 'gemini-transcribe':
-                _tasks[uid]['progress'] = 'Transcribing… (Gemini 3.5 Transcribe)'
-                segs, detected_language = gemini_transcribe_dedicated(wav_path, language, romanize)
             else:
                 _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
                 try:
@@ -2229,6 +2333,180 @@ def transcribe_result(task_id):
     _tasks.pop(task_id, None)
     return send_file(path, as_attachment=True, download_name=filename,
                      mimetype='text/plain')
+
+
+def _stitch_audio_segments(clip_paths, gap_durations, out_path):
+    """Concatenate clip_paths in order, inserting a silence gap (seconds,
+    capped at 3s) from gap_durations[i] after clip i. Approximates the
+    source video's pacing — not exact duration-matching, which belongs to
+    the later lip-sync step, not this one."""
+    filelist_path = out_path + '.filelist.txt'
+    silence_paths = []
+    with open(filelist_path, 'w') as f:
+        for i, clip_path in enumerate(clip_paths):
+            f.write(f"file '{clip_path}'\n")
+            gap = min(gap_durations[i], 3.0) if i < len(gap_durations) else 0
+            if gap > 0.05:
+                silence_path = f'{out_path}.silence_{i}.mp3'
+                subprocess.run(
+                    ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+                     '-t', str(gap), '-q:a', '9', silence_path],
+                    capture_output=True
+                )
+                f.write(f"file '{silence_path}'\n")
+                silence_paths.append(silence_path)
+    subprocess.run(
+        ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', filelist_path,
+         '-c:a', 'libmp3lame', out_path],
+        capture_output=True
+    )
+    os.remove(filelist_path)
+    for p in silence_paths:
+        try: os.remove(p)
+        except Exception: pass
+
+
+@app.route('/translate-dub', methods=['POST'])
+def translate_dub_route():
+    file = request.files.get('file')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    target_language = request.form.get('target_language')
+    if not target_language:
+        return jsonify(error='Target language is required'), 400
+    source_language = request.form.get('source_language') or None
+
+    input_path, uid = save_upload(file, fallback_ext='.mp4')
+    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
+
+    def run():
+        wav_path = os.path.join(TEMP_DIR, f'vt_td_{uid}.wav')
+        try:
+            r = subprocess.run(
+                ['ffmpeg', '-y', '-i', input_path,
+                 '-ar', '44100', '-ac', '1', '-f', 'wav', wav_path],
+                capture_output=True)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from file.'}
+                cleanup_later(input_path)
+                return
+
+            _tasks[uid]['progress'] = 'Transcribing, translating, and reading emotion… (Gemini)'
+            segments = gemini_translate_with_emotion(wav_path, target_language, source_language)
+
+            _tasks[uid]['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
+            speakers = sorted({s['speaker'] for s in segments if s['speaker']})
+            voice_ids = {}
+            if speakers:
+                for i, spk in enumerate(speakers):
+                    sample_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_sample_{i}.wav')
+                    if extract_speaker_sample(wav_path, segments, spk, sample_path):
+                        voice_ids[spk] = elevenlabs_clone_voice(sample_path, f'{uid}-{spk}')
+                    cleanup_later(sample_path, delay=5)
+            else:
+                sample_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_sample.wav')
+                if extract_speaker_sample(wav_path, segments, None, sample_path):
+                    voice_ids[None] = elevenlabs_clone_voice(sample_path, f'{uid}-speaker')
+                cleanup_later(sample_path, delay=5)
+
+            if not voice_ids:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract enough clean speaker audio to clone a voice.'}
+                cleanup_later(wav_path)
+                cleanup_later(input_path)
+                return
+
+            _tasks[uid] = {
+                'status': 'transcript_ready',
+                'segments': segments,
+                'target_language': target_language,
+                '_voice_ids': voice_ids,
+            }
+            cleanup_later(wav_path)
+            cleanup_later(input_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            for p in [input_path, wav_path]:
+                try: cleanup_later(p)
+                except: pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/translate-dub/status/<task_id>')
+def translate_dub_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    # Don't leak internal bookkeeping (ElevenLabs voice IDs) to the client.
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_')})
+
+
+@app.route('/translate-dub/generate-audio/<task_id>', methods=['POST'])
+def translate_dub_generate_audio(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'transcript_ready':
+        return jsonify(error='Transcript not ready for this task'), 404
+
+    edited_segments = (request.get_json(silent=True) or {}).get('segments')
+    if not edited_segments:
+        return jsonify(error='No segments provided'), 400
+
+    voice_ids = task.get('_voice_ids', {})
+    task['status']   = 'processing_audio'
+    task['progress'] = 'Generating speech… (ElevenLabs)'
+
+    def run():
+        clip_paths = []
+        try:
+            kept = [s for s in edited_segments if (s.get('text') or '').strip()]
+            for i, seg in enumerate(kept):
+                task['progress'] = f'Generating speech… ({i + 1}/{len(kept)})'
+                voice_id = (voice_ids.get(seg.get('speaker')) or voice_ids.get(None)
+                            or next(iter(voice_ids.values())))
+                clip_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_clip_{i}.mp3')
+                elevenlabs_tts(seg['text'].strip(), voice_id, seg.get('emotion', 'neutral'), clip_path)
+                clip_paths.append(clip_path)
+
+            gaps = [
+                max(0.0, kept[i + 1]['start'] - kept[i]['end']) if i + 1 < len(kept) else 0.0
+                for i in range(len(kept))
+            ]
+
+            out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
+            _stitch_audio_segments(clip_paths, gaps, out_path)
+
+            _tasks[task_id] = {
+                'status':   'done',
+                'result':   out_path,
+                'filename': 'translated_audio.mp3',
+                'segments': kept,
+            }
+            for p in clip_paths:
+                cleanup_later(p, delay=5)
+        except Exception as e:
+            _tasks[task_id] = {'status': 'error', 'error': str(e)[:300]}
+            for p in clip_paths:
+                try: cleanup_later(p, delay=5)
+                except: pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(status='processing_audio')
+
+
+@app.route('/translate-dub/result/<task_id>')
+def translate_dub_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    # Not popped on read (unlike /transcribe/result) — the UI fetches this
+    # same URL both for an inline <audio> preview and for the download
+    # link, so it needs to stay servable more than once. Cleaned up by the
+    # scheduled cleanup_later() call instead.
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'translated_audio.mp3'),
+                     mimetype='audio/mpeg')
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

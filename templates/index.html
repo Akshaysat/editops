@@ -442,6 +442,27 @@
     }
     .tr-reset:hover { color: var(--text); }
 
+    /* ── Translate & Dub segment rows ── */
+    .td-seg { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    .td-seg:last-child { border-bottom: none; }
+    .td-seg:hover { background: rgba(0,0,0,0.025); }
+    .td-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
+    .td-ts { color: #AAAAAA; font-family: ui-monospace, 'SF Mono', monospace; font-size: 11px; }
+    .td-badge {
+      font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+      background: #F0F0F0; color: var(--muted); text-transform: capitalize;
+    }
+    .td-badge.td-emotion { background: #EEF3FF; color: #3355AA; }
+    .td-source { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 4px; }
+    .td-txt {
+      color: var(--text); border-radius: 4px; outline: none; padding: 3px 5px;
+      min-width: 0; word-break: break-word; line-height: 1.55;
+    }
+    .td-txt[contenteditable]:hover { background: rgba(0,0,0,0.03); }
+    .td-txt[contenteditable]:focus {
+      background: rgba(0,0,0,0.05); box-shadow: 0 0 0 1.5px var(--text); border-radius: 3px;
+    }
+
     /* ── Flagged-word count badge (used by Spelling QA) ── */
     .sp-badge { background: #E03131; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
 
@@ -643,6 +664,7 @@
     <button class="nav-item"        data-tab="svg2aep"    onclick="switchTab(this,'svg2aep')"><span class="ni">◆</span> SVG → After Effects</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
+    <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
     <div class="nav-section">Review</div>
     <button class="nav-item"        data-tab="qacheck"    onclick="switchTab(this,'qacheck')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
@@ -925,7 +947,6 @@
         <select id="tr-model" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;" onchange="onTranscribeModelChange()">
           <option value="whisper">Local (Whisper) — private, runs on this machine</option>
           <option value="gemini">Gemini — cloud, sends audio to Google</option>
-          <option value="gemini-transcribe">Gemini 3.5 Transcribe — cloud, accurate timestamps + speaker labels</option>
         </select>
       </div>
 
@@ -979,13 +1000,6 @@
         ⏱️ Timestamps are approximate (Gemini doesn't force-align like Whisper does), more accurate on shorter clips.<br>
         🗣️ Automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected.
       </div>
-      <div class="hint" id="tr-hint-gemini-transcribe" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
-        ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
-        🎯 Real forced-alignment timestamps and automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected — the timestamps are more accurate than the other Gemini option, but its speaker labels aren't necessarily more accurate; both options do their own separate speaker detection.<br>
-        💰 Costly — roughly 3-4x more expensive per minute of audio than the regular Gemini option. Use it when you actually need the forced-alignment timestamps, not as the default.<br>
-        🌐 For heavily code-switched audio (frequent full sentences in a different language than the one you picked), a few of those sentences can get dropped or mangled. If that happens, try the regular Gemini option instead — it handles mixed-language speech more reliably.
-      </div>
-
       <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
       <div class="progress-wrap" id="pw-transcribe">
         <div class="progress-meta"><span id="pl-transcribe">Uploading…</span><span id="pp-transcribe">0%</span></div>
@@ -994,6 +1008,86 @@
       <div class="result-box" id="rb-transcribe"></div>
       <div id="tr-extra"></div>
       <div class="error-box"  id="eb-transcribe"></div>
+    </div>
+  </div>
+
+  <!-- ══ TRANSLATE & DUB ══ -->
+  <div id="panel-translatedub" class="panel">
+    <div class="page-header"><h1>Translate & Dub</h1><p>Translate a video into another language and generate voice-cloned speech that carries over the speaker's emotional delivery — review and edit the translated transcript before any audio is generated.</p></div>
+    <div class="card">
+      <h2>Translate & Dub</h2>
+      <p class="desc">Translate & Dub.</p>
+
+      <div class="dropzone" id="dz-translatedub" onclick="document.getElementById('f-translatedub').click()">
+        <div class="dz-icon">🌐</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-translatedub"></div>
+        <input type="file" id="f-translatedub" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'translatedub')">
+      </div>
+
+      <div class="field">
+        <label>Target language</label>
+        <select id="td-target-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+          <option value="ta">Tamil</option>
+          <option value="hi">Hindi</option>
+          <option value="en">English</option>
+          <option value="mr">Marathi</option>
+          <option value="gu">Gujarati</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+          <option value="pa">Punjabi</option>
+          <option value="or">Odia</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+          <option value="ar">Arabic</option>
+          <option value="ru">Russian</option>
+          <option value="ko">Korean</option>
+          <option value="it">Italian</option>
+          <option value="nl">Dutch</option>
+          <option value="tr">Turkish</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Source language <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+        <select id="td-source-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+          <option value="">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="mr">Marathi</option>
+          <option value="gu">Gujarati</option>
+          <option value="ta">Tamil</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+          <option value="pa">Punjabi</option>
+          <option value="or">Odia</option>
+        </select>
+        <div class="hint">Specifying the source language improves accuracy. Auto-detect works well for most content.</div>
+      </div>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        ☁️ Audio is sent to Google Gemini (transcription, translation, emotion reading) and ElevenLabs (voice cloning, text-to-speech) — don't use this for confidential client content unless that's acceptable.<br>
+        🎭 Each line's emotional delivery is read from the source audio itself and carried into the generated speech — an excited line stays more expressive, a calm line stays calmer.<br>
+        🗣️ Voices are cloned from the speaker(s) in your source video, so the dub sounds like them, not a generic voice.<br>
+        ✏️ This only produces the translated transcript and dubbed audio — you review and edit the transcript first, then generate audio once you're happy with it. Lip-syncing the audio onto the video is a separate step, done afterward.
+      </div>
+
+      <button class="submit-btn" onclick="submitTranslateDub()">Get Translated Transcript</button>
+      <div class="progress-wrap" id="pw-translatedub">
+        <div class="progress-meta"><span id="pl-translatedub">Uploading…</span><span id="pp-translatedub">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-translatedub"></div></div>
+      </div>
+      <div class="result-box" id="rb-translatedub"></div>
+      <div id="td-extra"></div>
+      <div class="error-box"  id="eb-translatedub"></div>
     </div>
   </div>
 
@@ -2078,9 +2172,8 @@ function submitYT() {
 // ── Transcribe ─────────────────────────────────────────────────────────────
 function onTranscribeModelChange() {
   const model = document.getElementById('tr-model').value;
-  document.getElementById('tr-hint-whisper').style.display          = model === 'whisper' ? 'block' : 'none';
-  document.getElementById('tr-hint-gemini').style.display           = model === 'gemini' ? 'block' : 'none';
-  document.getElementById('tr-hint-gemini-transcribe').style.display = model === 'gemini-transcribe' ? 'block' : 'none';
+  document.getElementById('tr-hint-whisper').style.display = model === 'whisper' ? 'block' : 'none';
+  document.getElementById('tr-hint-gemini').style.display  = model === 'gemini' ? 'block' : 'none';
 }
 
 // Odia isn't in local Whisper's supported language set — force Gemini so a
@@ -2360,6 +2453,215 @@ function srtTimestamp(s) {
   const sec = Math.floor(s % 60);
   const ms  = Math.round((s % 1) * 1000);
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')},${String(ms).padStart(3,'0')}`;
+}
+
+// ── Translate & Dub ──────────────────────────────────────────────────────────
+let _tdSegs     = [];   // current translated segments (may be edited)
+let _tdSegsOrig = [];   // original from Gemini, for "reset to original"
+let _tdTaskId   = null;
+
+function submitTranslateDub() {
+  const file = document.getElementById('f-translatedub').files[0];
+  if (!file) return alert('Please select a video or audio file first.');
+  const targetLang = document.getElementById('td-target-lang').value;
+  const sourceLang = document.getElementById('td-source-lang').value;
+
+  resetUI('translatedub');
+  document.getElementById('td-extra').innerHTML = '';
+  _tdTaskId = null;
+
+  const form = new FormData();
+  form.append('file', file);
+  form.append('target_language', targetLang);
+  if (sourceLang) form.append('source_language', sourceLang);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/translate-dub');
+  xhr.responseType = 'json';
+
+  showProgress('translatedub', 0, 'Uploading…');
+
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    showProgress('translatedub', Math.round(e.loaded / e.total * 20), 'Uploading…');
+  };
+
+  xhr.upload.onload = () => showProgress('translatedub', 25, 'Starting…');
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      showError('translatedub', (xhr.response && xhr.response.error) || 'Upload failed.');
+      return;
+    }
+    pollTranslateDub(xhr.response.task_id, Date.now());
+  };
+
+  xhr.onerror = () => showError('translatedub', 'Network error — is the server running?');
+
+  xhr.send(form);
+}
+
+function pollTranslateDub(taskId, startTime) {
+  _tdTaskId = taskId;
+  const pf = document.getElementById('pf-translatedub');
+  const pp = document.getElementById('pp-translatedub');
+  const pl = document.getElementById('pl-translatedub');
+
+  const interval = setInterval(async () => {
+    if (!document.getElementById('pw-translatedub').classList.contains('visible')) {
+      clearInterval(interval);
+      return;
+    }
+    let data;
+    try {
+      data = await (await fetch('/translate-dub/status/' + taskId)).json();
+    } catch {
+      clearInterval(interval);
+      showError('translatedub', 'Lost connection to server.');
+      return;
+    }
+
+    if (!data || data.status === 'processing') {
+      const elapsed = Math.min(Date.now() - startTime, 300000);
+      const pct = Math.round(25 + elapsed / 300000 * 60);
+      pl.textContent = (data && data.progress) ? data.progress : 'Working…';
+      pp.textContent = pct + '%';
+      pf.style.width = pct + '%';
+      return;
+    }
+
+    clearInterval(interval);
+
+    if (data.status === 'transcript_ready') {
+      document.getElementById('pw-translatedub').classList.remove('visible');
+      _tdSegs     = data.segments.map(s => ({...s}));
+      _tdSegsOrig = data.segments.map(s => ({...s}));
+      renderTranslateDubTranscript();
+    } else {
+      showError('translatedub', data.error || 'Translation failed.');
+    }
+  }, 2000);
+}
+
+function renderTranslateDubTranscript() {
+  const rb = document.getElementById('rb-translatedub');
+  rb.innerHTML = `<div class="result-title">✓ Translated transcript ready — review and edit before generating audio.</div>`;
+  rb.classList.add('visible');
+
+  const rows = _tdSegs.map((s, i) => (
+    `<div class="td-seg" data-idx="${i}">` +
+      `<div class="td-meta">` +
+        `<span class="td-ts">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
+        (s.speaker ? `<span class="td-badge">${escHtml(s.speaker)}</span>` : '') +
+        `<span class="td-badge td-emotion">${escHtml(s.emotion || 'neutral')}</span>` +
+      `</div>` +
+      `<div class="td-source">${escHtml(s.source_text)}</div>` +
+      `<div class="td-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</div>` +
+    `</div>`
+  )).join('');
+
+  document.getElementById('td-extra').innerHTML =
+    `<div class="tr-panel">` +
+      `<div class="tr-panel-header">` +
+        `<span>Translated transcript · ${_tdSegs.length} segments</span>` +
+        `<span class="tr-panel-actions">` +
+          `<span class="tr-hint">Click a line to edit the translation</span>` +
+          `<button class="tr-reset" onclick="resetTranslateDubTranscript()">Reset to original</button>` +
+        `</span>` +
+      `</div>` +
+      `<div class="tr-preview" id="td-preview">${rows}</div>` +
+    `</div>` +
+    `<button class="submit-btn" style="margin-top:14px;" onclick="generateDubAudio()">Lock Transcript & Generate Audio</button>` +
+    `<div class="progress-wrap" id="pw-tdaudio">` +
+      `<div class="progress-meta"><span id="pl-tdaudio">Generating…</span><span id="pp-tdaudio">0%</span></div>` +
+      `<div class="progress-bar"><div class="progress-fill" id="pf-tdaudio"></div></div>` +
+    `</div>` +
+    `<div id="td-audio-result"></div>` +
+    `<div class="error-box" id="eb-tdaudio"></div>`;
+
+  document.querySelectorAll('#td-preview .td-txt[contenteditable]').forEach(el => {
+    el.addEventListener('input', () => {
+      _tdSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
+    });
+  });
+}
+
+function resetTranslateDubTranscript() {
+  _tdSegs = _tdSegsOrig.map(s => ({...s}));
+  renderTranslateDubTranscript();
+}
+
+function generateDubAudio() {
+  if (!_tdTaskId) return;
+  document.getElementById('pw-tdaudio').classList.add('visible');
+  document.getElementById('td-audio-result').innerHTML = '';
+  document.getElementById('eb-tdaudio').classList.remove('visible');
+
+  fetch(`/translate-dub/generate-audio/${_tdTaskId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ segments: _tdSegs }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        document.getElementById('pw-tdaudio').classList.remove('visible');
+        const eb = document.getElementById('eb-tdaudio');
+        eb.textContent = '✕ ' + data.error;
+        eb.classList.add('visible');
+        return;
+      }
+      pollDubAudio(_tdTaskId, Date.now());
+    })
+    .catch(() => {
+      document.getElementById('pw-tdaudio').classList.remove('visible');
+      const eb = document.getElementById('eb-tdaudio');
+      eb.textContent = '✕ Network error — is the server running?';
+      eb.classList.add('visible');
+    });
+}
+
+function pollDubAudio(taskId, startTime) {
+  const pf = document.getElementById('pf-tdaudio');
+  const pp = document.getElementById('pp-tdaudio');
+  const pl = document.getElementById('pl-tdaudio');
+
+  const interval = setInterval(async () => {
+    let data;
+    try {
+      data = await (await fetch('/translate-dub/status/' + taskId)).json();
+    } catch {
+      clearInterval(interval);
+      const eb = document.getElementById('eb-tdaudio');
+      eb.textContent = '✕ Lost connection to server.';
+      eb.classList.add('visible');
+      return;
+    }
+
+    if (!data || data.status === 'processing_audio') {
+      const elapsed = Math.min(Date.now() - startTime, 180000);
+      const pct = Math.round(elapsed / 180000 * 90);
+      pl.textContent = (data && data.progress) ? data.progress : 'Generating…';
+      pp.textContent = pct + '%';
+      pf.style.width = pct + '%';
+      return;
+    }
+
+    clearInterval(interval);
+    document.getElementById('pw-tdaudio').classList.remove('visible');
+
+    if (data.status === 'done') {
+      const url = `/translate-dub/result/${taskId}`;
+      document.getElementById('td-audio-result').innerHTML =
+        `<div class="result-title">✓ Dubbed audio ready.</div>` +
+        `<div class="tr-player-wrap"><audio src="${url}" controls></audio></div>` +
+        `<a class="download-btn" href="${url}" download="translated_audio.mp3">⬇ Download translated_audio.mp3</a>`;
+    } else {
+      const eb = document.getElementById('eb-tdaudio');
+      eb.textContent = '✕ ' + (data.error || 'Audio generation failed.');
+      eb.classList.add('visible');
+    }
+  }, 2000);
 }
 
 // ── Spelling QA ───────────────────────────────────────────────────────────
