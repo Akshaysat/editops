@@ -2126,26 +2126,50 @@ def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
                            max_total_duration=120.0, max_clips=10, min_clip_duration=5.0):
     """Cut `speaker`'s lines from wav_path into separate short clip files
     (rather than one pre-concatenated file — see elevenlabs_clone_voice()
-    for why), for voice cloning. Prefers the speaker's longest segments
-    first, since a longer continuous single-take clip clones better than
-    many short fragments, and drops anything under `min_clip_duration` —
-    ElevenLabs rejects any individual sample file shorter than 4.6s
-    outright ("audio_too_short"), verified against the live API; the
-    default here keeps a small safety margin above that. `speaker` may be
-    None to mean "use the whole track" (single-speaker audio). Returns
-    the list of written file paths (possibly empty)."""
-    segs = [s for s in segments if s.get('speaker') == speaker] if speaker else list(segments)
-    segs = [s for s in segs if (s['end'] - s['start']) >= min_clip_duration]
-    segs.sort(key=lambda s: s['end'] - s['start'], reverse=True)
+    for why), for voice cloning.
+
+    A single natural sentence is often shorter than ElevenLabs' 4.6s
+    per-sample minimum ("audio_too_short", verified against the live
+    API), especially in a fast back-and-forth conversation — so instead
+    of filtering segments individually (which could leave a speaker with
+    zero usable clips despite plenty of total speaking time), this first
+    groups `segments` (the full, speaker-interleaved, time-ordered list)
+    into runs of consecutive entries from the same speaker, then extracts
+    each run as ONE continuous cut from its first segment's start to its
+    last segment's end. That's safe because a run never crosses a moment
+    where a different speaker was talking — unlike concatenating several
+    separate extracts together, one continuous cut can't introduce a
+    splice artifact. Falls back to the single longest run for a speaker
+    if none reach `min_clip_duration` on their own, rather than silently
+    producing no clips at all. `speaker` may be None to mean "use the
+    whole track" (single-speaker audio — the whole list is one run).
+    Returns the list of written file paths (possibly empty)."""
+    runs, current = [], []
+    for s in segments:
+        if (s.get('speaker') == speaker) if speaker else True:
+            current.append(s)
+        elif current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+
+    windows = [(r[0]['start'], r[-1]['end']) for r in runs]
+    long_enough = [w for w in windows if w[1] - w[0] >= min_clip_duration]
+    if long_enough:
+        windows = long_enough
+    elif windows:
+        windows = [max(windows, key=lambda w: w[1] - w[0])]
+    windows.sort(key=lambda w: w[1] - w[0], reverse=True)
 
     paths, total = [], 0.0
-    for i, s in enumerate(segs):
+    for i, (start, end) in enumerate(windows):
         if total >= max_total_duration or len(paths) >= max_clips:
             break
-        dur = s['end'] - s['start']
+        dur = min(end - start, max_total_duration - total)
         clip_path = os.path.join(out_dir, f'vt_td_{tag}_voiceclip_{i}.wav')
         subprocess.run(
-            ['ffmpeg', '-y', '-ss', str(s['start']), '-t', str(dur), '-i', wav_path, clip_path],
+            ['ffmpeg', '-y', '-ss', str(start), '-t', str(dur), '-i', wav_path, clip_path],
             capture_output=True
         )
         if os.path.exists(clip_path):
