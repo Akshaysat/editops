@@ -1837,6 +1837,27 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
         ' Write each language in its own native script (e.g. Devanagari for '
         'Hindi), not transliterated.'
     )
+    # This is the fix for word-level code-switching, not just sentence-level:
+    # without it, a common English loanword spoken mid-Hindi-sentence (e.g.
+    # "mutual fund", "trip", "hotel") tends to get phonetically
+    # transliterated into Devanagari ("म्यूचुअल फंड") instead of kept in its
+    # correct English spelling — verified on Video 11.mp4, where every one
+    # of ~15 such loanwords across the clip came out wrong without this,
+    # and correct with it.
+    english_word_instruction = (
+        ' This audio code-switches at the word level, not just the '
+        'sentence level — a sentence in the primary language will often '
+        'contain individual English words or short phrases spoken in '
+        'English (e.g. "mutual fund", "trip", "hotel", "agent", "advisor", '
+        'the way English loanwords are used casually in everyday Hindi '
+        'speech). Identify each such word by ear — if it is genuinely an '
+        'English word, even a common one used casually inside a sentence '
+        'in another language, write it in its correct English spelling '
+        'using Latin letters. Do NOT phonetically transliterate it into '
+        'the other script/language just because of the sentence it is '
+        'embedded in — only words that are genuinely from that other '
+        'language should be written that way.'
+    )
     # This model gets the real audio, not just text, so it can identify
     # distinct voices directly — no separate diarization system needed.
     # Verified deterministic (2 repeat runs on the same clip matched
@@ -1851,7 +1872,8 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
         'the field (or leave it empty) if you can only detect one speaker.'
     )
     prompt = (
-        'Transcribe this audio.' + lang_hint + script_instruction + speaker_instruction +
+        'Transcribe this audio.' + lang_hint + script_instruction +
+        english_word_instruction + speaker_instruction +
         ' Return ONLY a JSON array (no markdown, no commentary) of objects '
         'with keys "start" (seconds, number), "end" (seconds, number), '
         '"speaker" (string, optional), and "text" (string), one per natural '
