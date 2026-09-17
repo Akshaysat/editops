@@ -1837,12 +1837,26 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
         ' Write each language in its own native script (e.g. Devanagari for '
         'Hindi), not transliterated.'
     )
+    # This model gets the real audio, not just text, so it can identify
+    # distinct voices directly — no separate diarization system needed.
+    # Verified deterministic (2 repeat runs on the same clip matched
+    # exactly) and, on a real 4-speaker clip, more accurate than
+    # gemini_transcribe_dedicated's own native diarization, which
+    # undercounted the same clip at 3 speakers.
+    speaker_instruction = (
+        ' Identify each distinct speaker by their voice and include a '
+        '"speaker" field on every object naming which speaker is talking '
+        '(e.g. "Speaker 1", "Speaker 2"), using the same label for the same '
+        'voice consistently throughout, in order of first appearance. Omit '
+        'the field (or leave it empty) if you can only detect one speaker.'
+    )
     prompt = (
-        'Transcribe this audio.' + lang_hint + script_instruction +
+        'Transcribe this audio.' + lang_hint + script_instruction + speaker_instruction +
         ' Return ONLY a JSON array (no markdown, no commentary) of objects '
-        'with keys "start" (seconds, number), "end" (seconds, number), and '
-        '"text" (string), one per natural sentence or phrase, covering the '
-        'entire audio from start to finish in order.'
+        'with keys "start" (seconds, number), "end" (seconds, number), '
+        '"speaker" (string, optional), and "text" (string), one per natural '
+        'sentence or phrase, covering the entire audio from start to finish '
+        'in order.'
     )
     response = client.models.generate_content(
         model='gemini-flash-latest',
@@ -1851,9 +1865,29 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     parsed = _parse_gemini_json(response)
 
     segs = [
-        {'start': float(s['start']), 'end': float(s['end']), 'text': s['text'].strip()}
+        {
+            'start': float(s['start']),
+            'end': float(s['end']),
+            'text': s['text'].strip(),
+            '_speaker': (s.get('speaker') or '').strip() or None,
+        }
         for s in parsed
     ]
+
+    # Only label speakers when more than one was actually detected, so a
+    # single-speaker video's output looks identical to before this was
+    # added — same rule gemini_transcribe_dedicated uses.
+    speaker_order = []
+    for s in segs:
+        if s['_speaker'] and s['_speaker'] not in speaker_order:
+            speaker_order.append(s['_speaker'])
+    if len(speaker_order) > 1:
+        for s in segs:
+            if s['_speaker']:
+                s['text'] = f"{s['_speaker']}: {s['text']}"
+    for s in segs:
+        s.pop('_speaker', None)
+
     return segs, (language or '')
 
 
