@@ -974,7 +974,8 @@
       </div>
       <div class="hint" id="tr-hint-gemini-transcribe" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
         ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
-        🎯 Real forced-alignment timestamps and automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected — more accurate than the other Gemini option, at a somewhat higher cost per minute.
+        🎯 Real forced-alignment timestamps and automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected — more accurate than the other Gemini option.<br>
+        💰 Costly — roughly 3-4x more expensive per minute of audio than the regular Gemini option. Use it when you actually need the accuracy/speaker labels, not as the default.
       </div>
 
       <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
