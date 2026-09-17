@@ -1992,7 +1992,12 @@ def gemini_enforce_keywords_english(segs, keywords):
 # delivery, especially on an Instant Voice Clone. v3's audio tags are the
 # mechanism ElevenLabs actually built for this, and work with IVC voices.
 EMOTION_AUDIO_TAGS = {
-    'neutral':     '',
+    # A blank tag gives the model zero delivery guidance rather than a
+    # neutral-but-expressive one, and real testing showed exactly that
+    # line coming out flatter/more robotic than every tagged line around
+    # it — "[naturally]" still directs the model instead of leaving it
+    # with nothing to go on.
+    'neutral':     '[naturally]',
     'calm':        '[calmly]',
     'happy':       '[happily]',
     'excited':     '[excited]',
@@ -2025,26 +2030,36 @@ def _elevenlabs_call(req, timeout=60):
         raise ValueError(f'ElevenLabs API error ({e.code}): {body[:300]}') from e
 
 
-def elevenlabs_clone_voice(sample_path, name):
-    """Create an Instant Voice Clone from a short audio sample. Returns the
-    new voice_id. Raises on failure.
+def elevenlabs_clone_voice(sample_paths, name):
+    """Create an Instant Voice Clone from one or more short audio samples.
+    Returns the new voice_id. Raises on failure.
+
+    Each sample is sent as its own "files" part rather than pre-
+    concatenated into one file — ElevenLabs' own guidance is that it
+    fuses multiple clean clips itself, and a naive ffmpeg concat (the
+    earlier version of this function) introduces its own splice artifact
+    at every cut point, which an in isolation-trained clone would
+    otherwise pick up as if it were a voice characteristic.
 
     remove_background_noise=true runs ElevenLabs' own Voice Isolator model
-    on the sample before cloning — without it, background music under the
-    speaker in the source video gets cloned as part of the "voice" itself
-    (echo-y, musical artifacts in the generated speech), since
-    extract_speaker_sample() cuts straight from the source audio with no
-    separation of its own.
+    on the samples before cloning — without it, background music under
+    the speaker in the source video gets cloned as part of the "voice"
+    itself (echo-y, musical artifacts in the generated speech).
     """
     boundary = uuid.uuid4().hex
-    with open(sample_path, 'rb') as f:
-        audio_bytes = f.read()
-    body = (
-        f'--{boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n{name}\r\n'
-        f'--{boundary}\r\nContent-Disposition: form-data; name="remove_background_noise"\r\n\r\ntrue\r\n'
-        f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="sample.wav"\r\n'
-        f'Content-Type: audio/wav\r\n\r\n'
-    ).encode() + audio_bytes + f'\r\n--{boundary}--\r\n'.encode()
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="name"\r\n\r\n{name}\r\n'.encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="remove_background_noise"\r\n\r\ntrue\r\n'.encode(),
+    ]
+    for i, sample_path in enumerate(sample_paths):
+        with open(sample_path, 'rb') as f:
+            audio_bytes = f.read()
+        parts.append(
+            (f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="sample_{i}.wav"\r\n'
+             f'Content-Type: audio/wav\r\n\r\n').encode() + audio_bytes + b'\r\n'
+        )
+    parts.append(f'--{boundary}--\r\n'.encode())
+    body = b''.join(parts)
 
     req = urllib.request.Request(
         'https://api.elevenlabs.io/v1/voices/add',
@@ -2107,35 +2122,36 @@ def elevenlabs_tts(run_segments, voice_id, out_path):
         f.write(audio)
 
 
-def extract_speaker_sample(wav_path, segments, speaker, out_path, max_duration=90.0):
-    """Concatenate up to `max_duration` seconds of `speaker`'s lines from
-    wav_path into a single clip at out_path, for voice cloning — more
-    sample audio gives ElevenLabs a better clone than a single short line.
-    `speaker` may be None to mean "use the whole track" (single-speaker
-    audio, nothing to filter by). Returns True if a sample was written."""
-    segs = [s for s in segments if s.get('speaker') == speaker] if speaker else segments
-    if not segs:
-        return False
+def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
+                           max_total_duration=120.0, max_clips=10, min_clip_duration=5.0):
+    """Cut `speaker`'s lines from wav_path into separate short clip files
+    (rather than one pre-concatenated file — see elevenlabs_clone_voice()
+    for why), for voice cloning. Prefers the speaker's longest segments
+    first, since a longer continuous single-take clip clones better than
+    many short fragments, and drops anything under `min_clip_duration` —
+    ElevenLabs rejects any individual sample file shorter than 4.6s
+    outright ("audio_too_short"), verified against the live API; the
+    default here keeps a small safety margin above that. `speaker` may be
+    None to mean "use the whole track" (single-speaker audio). Returns
+    the list of written file paths (possibly empty)."""
+    segs = [s for s in segments if s.get('speaker') == speaker] if speaker else list(segments)
+    segs = [s for s in segs if (s['end'] - s['start']) >= min_clip_duration]
+    segs.sort(key=lambda s: s['end'] - s['start'], reverse=True)
 
-    inputs, filter_labels, total = [], [], 0.0
-    for s in segs:
-        if total >= max_duration:
+    paths, total = [], 0.0
+    for i, s in enumerate(segs):
+        if total >= max_total_duration or len(paths) >= max_clips:
             break
-        take = min(s['end'] - s['start'], max_duration - total)
-        if take <= 0:
-            continue
-        inputs += ['-ss', str(s['start']), '-t', str(take), '-i', wav_path]
-        filter_labels.append(f'[{len(filter_labels)}:a]')
-        total += take
-    if not filter_labels:
-        return False
-
-    filter_complex = ''.join(filter_labels) + f'concat=n={len(filter_labels)}:v=0:a=1[out]'
-    subprocess.run(
-        ['ffmpeg', '-y', *inputs, '-filter_complex', filter_complex, '-map', '[out]', out_path],
-        capture_output=True
-    )
-    return os.path.exists(out_path)
+        dur = s['end'] - s['start']
+        clip_path = os.path.join(out_dir, f'vt_td_{tag}_voiceclip_{i}.wav')
+        subprocess.run(
+            ['ffmpeg', '-y', '-ss', str(s['start']), '-t', str(dur), '-i', wav_path, clip_path],
+            capture_output=True
+        )
+        if os.path.exists(clip_path):
+            paths.append(clip_path)
+            total += dur
+    return paths
 
 
 def gemini_translate_with_emotion(wav_path, target_language, source_language=None):
@@ -2161,15 +2177,21 @@ def gemini_translate_with_emotion(wav_path, target_language, source_language=Non
         f'2) Translate it into natural, conversational {target_name}, in '
         f'{target_name}\'s own native script — the way a native speaker '
         'would actually say it, not a stiff literal translation. '
-        'EXCEPTION: any word or phrase that was actually spoken in English '
-        'in the source audio — including common English loanwords used '
-        'casually mid-sentence, e.g. "mutual fund", "trip", "hotel" — must '
-        'stay in English in the translation too, written in Latin letters '
-        'exactly as spoken. Do not translate it into a native '
-        f'{target_name} equivalent and do not transliterate it into '
-        f'{target_name}\'s script — only words that were genuinely spoken '
-        f'in {target_name} (or the source language) get translated/written '
-        'in the native script; English stays English. '
+        'MOSTLY (roughly 90-95% of the time, not a strict 100% rule): a '
+        'word or phrase that was actually spoken in English in the source '
+        'audio should stay in English in the translation too, written in '
+        'Latin letters exactly as spoken, rather than being translated '
+        f'into a native {target_name} equivalent or transliterated into '
+        f'{target_name}\'s script. This matters most for specialized, '
+        'technical, or jargon-like terms with no natural everyday '
+        f'{target_name} equivalent (e.g. "mutual fund", "trip", "hotel") — '
+        'keep those in English. But for simple, common English words that '
+        f'have an everyday {target_name} word people would actually use '
+        'instead (e.g. "spend" said in the source becoming a native word '
+        'like "खर्च" if the target language is Marathi), translating '
+        'normally is fine and often sounds more natural — use judgment '
+        'the way a fluent bilingual speaker code-switches, not a rigid '
+        'rule applied to every single English word. '
         '3) Identify which distinct speaker is talking by voice, labeled '
         'consistently as "Speaker 1", "Speaker 2" etc. in order of first '
         'appearance (omit this field if you can only detect one speaker). '
@@ -2416,23 +2438,27 @@ def translate_dub_route():
             _tasks[uid]['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
             speakers = sorted({s['speaker'] for s in segments if s['speaker']})
             voice_ids = {}
-            if speakers:
-                for i, spk in enumerate(speakers):
-                    sample_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_sample_{i}.wav')
-                    if extract_speaker_sample(wav_path, segments, spk, sample_path):
-                        voice_ids[spk] = elevenlabs_clone_voice(sample_path, f'{uid}-{spk}')
-                    cleanup_later(sample_path, delay=5)
-            else:
-                sample_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_sample.wav')
-                if extract_speaker_sample(wav_path, segments, None, sample_path):
-                    voice_ids[None] = elevenlabs_clone_voice(sample_path, f'{uid}-speaker')
-                cleanup_later(sample_path, delay=5)
+            for spk in (speakers or [None]):
+                clip_paths = extract_speaker_clips(wav_path, segments, spk, TEMP_DIR, f'{uid}_{spk or "solo"}')
+                if clip_paths:
+                    voice_ids[spk] = elevenlabs_clone_voice(clip_paths, f'{uid}-{spk or "speaker"}')
+                for p in clip_paths:
+                    cleanup_later(p, delay=5)
 
             if not voice_ids:
                 _tasks[uid] = {'status': 'error', 'error': 'Could not extract enough clean speaker audio to clone a voice.'}
                 cleanup_later(wav_path)
                 cleanup_later(input_path)
                 return
+
+            # A freshly cloned voice can take ~10-15s to propagate through
+            # ElevenLabs' backend before synthesis is reliable — per their
+            # own guidance. Without this wait, the very first TTS call for
+            # a new voice (typically the video's opening line) can come
+            # out flatter/less expressive than every line after it, which
+            # is exactly what real testing on this feature surfaced.
+            _tasks[uid]['progress'] = 'Finishing up voice setup…'
+            time.sleep(15)
 
             _tasks[uid] = {
                 'status': 'transcript_ready',
