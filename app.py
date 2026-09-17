@@ -2058,18 +2058,36 @@ def elevenlabs_clone_voice(sample_path, name):
     return json.loads(_elevenlabs_call(req, timeout=120))['voice_id']
 
 
-def elevenlabs_tts(text, voice_id, emotion, out_path):
-    """Generate speech for `text` in the given voice on Eleven v3, with an
-    inline Audio Tag from EMOTION_AUDIO_TAGS (e.g. "[excited]") prepended
-    to drive delivery — v3's actual mechanism for this. `stability` is
-    fixed at 0.5 ("Natural" — v3 only takes 0/0.5/1.0, not a continuous
-    slider like v2) so it stays responsive to the tag rather than fighting
-    it: 0 ("Creative") is prone to hallucinating extra words, 1.0
-    ("Robust") is documented as less responsive to directional prompts —
-    i.e. it would mute the very tag this function relies on. Writes mp3
-    bytes to out_path. Raises on failure."""
-    tag = EMOTION_AUDIO_TAGS.get(emotion, '')
-    tagged_text = f'{tag} {text}'.strip() if tag else text
+def elevenlabs_tts(run_segments, voice_id, out_path):
+    """Generate ONE continuous speech clip on Eleven v3 for `run_segments`
+    — a list of {text, emotion} dicts, in order, all from the same
+    speaker's uninterrupted turn. Each segment's own Audio Tag (e.g.
+    "[excited]") is placed inline ahead of its text, so delivery can still
+    shift line to line, but the whole passage is one generation.
+
+    This matters because separate API calls have no memory of each other
+    — stitching many short per-sentence clips together is what produced
+    disjointed, part-by-part-sounding delivery instead of one flowing
+    performance, verified against real client feedback. ElevenLabs' own
+    fix for this, Request Stitching (previous_request_ids), is explicitly
+    unsupported on eleven_v3 (confirmed against their docs) — the model
+    this pipeline uses for Audio Tags — so merging same-speaker segments
+    into fewer, longer calls is the only way to get continuity while
+    keeping v3's emotion control. A speaker change still needs its own
+    call regardless, since it needs a different cloned voice.
+
+    `stability` is fixed at 0.5 ("Natural" — v3 only takes 0/0.5/1.0, not
+    a continuous slider like v2) so it stays responsive to the tags
+    rather than fighting them: 0 ("Creative") is prone to hallucinating
+    extra words, 1.0 ("Robust") is documented as less responsive to
+    directional prompts. Writes mp3 bytes to out_path. Raises on failure.
+    """
+    parts = []
+    for s in run_segments:
+        tag = EMOTION_AUDIO_TAGS.get(s['emotion'], '')
+        parts.append(f"{tag} {s['text']}".strip() if tag else s['text'])
+    tagged_text = ' '.join(parts)
+
     req = urllib.request.Request(
         f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}',
         data=json.dumps({
@@ -2084,7 +2102,7 @@ def elevenlabs_tts(text, voice_id, emotion, out_path):
         method='POST',
         headers={**_elevenlabs_headers(), 'Content-Type': 'application/json'},
     )
-    audio = _elevenlabs_call(req, timeout=60)
+    audio = _elevenlabs_call(req, timeout=90)
     with open(out_path, 'wb') as f:
         f.write(audio)
 
@@ -2461,17 +2479,31 @@ def translate_dub_generate_audio(task_id):
         clip_paths = []
         try:
             kept = [s for s in edited_segments if (s.get('text') or '').strip()]
-            for i, seg in enumerate(kept):
-                task['progress'] = f'Generating speech… ({i + 1}/{len(kept)})'
-                voice_id = (voice_ids.get(seg.get('speaker')) or voice_ids.get(None)
+
+            # Group consecutive same-speaker segments into one run each —
+            # a run becomes a single TTS call, so the model generates one
+            # continuous performance instead of many separately-generated
+            # clips stitched together. See elevenlabs_tts() for why. A
+            # speaker change is the only place a new run is forced, since
+            # it needs a different cloned voice.
+            runs = []
+            for seg in kept:
+                if runs and runs[-1][-1].get('speaker') == seg.get('speaker'):
+                    runs[-1].append(seg)
+                else:
+                    runs.append([seg])
+
+            for i, run_segs in enumerate(runs):
+                task['progress'] = f'Generating speech… ({i + 1}/{len(runs)})'
+                voice_id = (voice_ids.get(run_segs[0].get('speaker')) or voice_ids.get(None)
                             or next(iter(voice_ids.values())))
                 clip_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_clip_{i}.mp3')
-                elevenlabs_tts(seg['text'].strip(), voice_id, seg.get('emotion', 'neutral'), clip_path)
+                elevenlabs_tts(run_segs, voice_id, clip_path)
                 clip_paths.append(clip_path)
 
             gaps = [
-                max(0.0, kept[i + 1]['start'] - kept[i]['end']) if i + 1 < len(kept) else 0.0
-                for i in range(len(kept))
+                max(0.0, runs[i + 1][0]['start'] - runs[i][-1]['end']) if i + 1 < len(runs) else 0.0
+                for i in range(len(runs))
             ]
 
             out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
