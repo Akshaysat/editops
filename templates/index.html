@@ -925,6 +925,7 @@
         <select id="tr-model" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;" onchange="onTranscribeModelChange()">
           <option value="whisper">Local (Whisper) — private, runs on this machine</option>
           <option value="gemini">Gemini — cloud, sends audio to Google</option>
+          <option value="gemini-transcribe">Gemini 3.5 Transcribe — cloud, accurate timestamps + speaker labels</option>
         </select>
       </div>
 
@@ -970,6 +971,10 @@
       <div class="hint" id="tr-hint-gemini" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
         ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
         ⏱️ Timestamps are approximate (Gemini doesn't force-align like Whisper does), more accurate on shorter clips.
+      </div>
+      <div class="hint" id="tr-hint-gemini-transcribe" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
+        🎯 Real forced-alignment timestamps and automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected — more accurate than the other Gemini option, at a somewhat higher cost per minute.
       </div>
 
       <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
@@ -2064,8 +2069,9 @@ function submitYT() {
 // ── Transcribe ─────────────────────────────────────────────────────────────
 function onTranscribeModelChange() {
   const model = document.getElementById('tr-model').value;
-  document.getElementById('tr-hint-whisper').style.display = model === 'gemini' ? 'none' : 'block';
-  document.getElementById('tr-hint-gemini').style.display  = model === 'gemini' ? 'block' : 'none';
+  document.getElementById('tr-hint-whisper').style.display          = model === 'whisper' ? 'block' : 'none';
+  document.getElementById('tr-hint-gemini').style.display           = model === 'gemini' ? 'block' : 'none';
+  document.getElementById('tr-hint-gemini-transcribe').style.display = model === 'gemini-transcribe' ? 'block' : 'none';
 }
 
 // Odia isn't in local Whisper's supported language set — force Gemini so a

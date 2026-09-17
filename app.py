@@ -1845,6 +1845,83 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     return segs, (language or '')
 
 
+def _parse_gemini_offset(s):
+    """'7.2s' -> 7.2. gemini-3.5-transcribe reports word timestamps as
+    strings with a trailing 's', not plain numbers like the rest of the API."""
+    return float(s.rstrip('s')) if s else 0.0
+
+
+def gemini_transcribe_dedicated(wav_path, language=None, romanize=False):
+    """Transcribe via Gemini's dedicated transcription model
+    (gemini-3.5-transcribe). Returns (segments, detected_language).
+
+    Unlike gemini_transcribe(), this is a config-driven endpoint, not a
+    prompt-driven one — it has real forced-alignment word timestamps (each
+    segment's start/end comes from its first/last word's actual timing, not
+    the model "reading back" timestamps off its own generated text) and
+    native speaker diarization. It has no script/romanization control at
+    all, so romanize is applied as a separate cleanup pass via
+    gemini_romanize_segments(), same as the Whisper fallback path uses.
+    """
+    from google.genai import types
+
+    client = _gemini_client()
+    uploaded = client.files.upload(file=wav_path)
+
+    # custom_vocabulary is rejected outright when word_timestamp is on
+    # ("custom_vocabulary is incompatible with word timestamps") — verified
+    # against the live API. Timestamps are what this segments/SRT feature
+    # actually needs, so vocabulary biasing isn't usable here.
+    config = types.GenerateContentConfig(
+        audio_transcription_config=types.AudioTranscriptionConfig(
+            word_timestamp=True,
+            diarization=True,
+            language_codes=[language] if language else None,
+        )
+    )
+    response = client.models.generate_content(
+        model='gemini-3.5-transcribe',
+        contents=[uploaded],
+        config=config,
+    )
+
+    detected_language = language or ''
+    speaker_order = []
+    segs = []
+    for part in response.candidates[0].content.parts:
+        t = getattr(part, 'audio_transcription', None)
+        if not t or not t.words:
+            continue
+        text = (t.text or '').strip()
+        if not text:
+            continue
+        if t.language_code and not detected_language:
+            detected_language = t.language_code
+        if t.speaker_label and t.speaker_label not in speaker_order:
+            speaker_order.append(t.speaker_label)
+        segs.append({
+            'start': _parse_gemini_offset(t.words[0].start_offset),
+            'end':   _parse_gemini_offset(t.words[-1].end_offset),
+            'text':  text,
+            '_speaker': t.speaker_label,
+        })
+
+    # Only label speakers when more than one was actually detected, so a
+    # single-speaker video's output looks identical to the other models'.
+    if len(speaker_order) > 1:
+        names = {spk: f'Speaker {i + 1}' for i, spk in enumerate(speaker_order)}
+        for s in segs:
+            if s['_speaker']:
+                s['text'] = f"{names[s['_speaker']]}: {s['text']}"
+    for s in segs:
+        s.pop('_speaker', None)
+
+    if romanize:
+        segs = gemini_romanize_segments(segs)
+
+    return segs, detected_language
+
+
 def gemini_romanize_segments(segs):
     """Rewrite Devanagari (or other non-Latin) text in `segs` as casual
     Roman-script Hinglish via Gemini, the way people actually type it —
@@ -1929,6 +2006,9 @@ def transcribe_route():
                 segs, detected_language = gemini_transcribe(wav_path, language, romanize)
                 # Gemini already wrote the requested script directly — no
                 # separate romanization pass needed for this path.
+            elif model == 'gemini-transcribe':
+                _tasks[uid]['progress'] = 'Transcribing… (Gemini 3.5 Transcribe)'
+                segs, detected_language = gemini_transcribe_dedicated(wav_path, language, romanize)
             else:
                 _tasks[uid]['progress'] = 'Transcribing… (first run downloads the model)'
                 try:
