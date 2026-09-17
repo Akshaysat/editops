@@ -1885,20 +1885,31 @@ def gemini_transcribe_dedicated(wav_path, language=None, romanize=False):
     # against the live API. Timestamps are what this segments/SRT feature
     # actually needs, so vocabulary biasing isn't usable here.
     #
-    # language_codes is a hard filter, not a hint — verified against the
-    # live API on a Hindi clip with one fully-English sentence spliced in.
-    # ['hi'] alone doesn't drop the English sentence, but force-decodes it
-    # phonetically into Devanagari garbage instead of English text.
-    # ['hi', 'en'] is worse: it drops every Hindi segment and keeps only
-    # the English one. Leaving it unset (auto-detect) was the only config
-    # that transcribed all three segments correctly — Hindi in Devanagari,
-    # English as real English — so it's never passed here regardless of
-    # the user's language selection.
+    # language_codes is a hard filter, not a hint, and every option here has
+    # a real failure mode — verified against the live API on two clips (a
+    # short synthetic Hindi+English splice, and a full 110s real Hindi
+    # conversation with a couple of English asides):
+    #   - [language] (e.g. ['hi']): on the real conversation this captured
+    #     the entire multi-speaker exchange correctly in Devanagari, but
+    #     dropped a few short fully-English lines entirely. On the
+    #     synthetic clip it kept the English line but force-decoded it
+    #     phonetically into Devanagari garbage instead of English text.
+    #   - None (auto-detect): on the real conversation this dropped ~80%
+    #     of the transcript (the entire middle of the conversation) and
+    #     rendered what little Hindi it did keep in Roman script instead
+    #     of Devanagari — a much worse loss than a few missing lines.
+    #   - [language, 'en']: same large-scale content loss as auto-detect.
+    # [language] alone is the best of these for real content: it reliably
+    # captures the bulk of a single-primary-language conversation, at the
+    # cost of occasionally mishandling a short other-language aside. For
+    # audio that's heavily code-switched throughout, the regular Gemini
+    # model (gemini_transcribe, prompt-driven) handles that far better —
+    # steer users there instead of trying to fix this via config alone.
     config = types.GenerateContentConfig(
         audio_transcription_config=types.AudioTranscriptionConfig(
             word_timestamp=True,
             diarization=True,
-            language_codes=None,
+            language_codes=[language] if language else None,
         )
     )
     response = client.models.generate_content(

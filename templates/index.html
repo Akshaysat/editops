@@ -981,7 +981,8 @@
       <div class="hint" id="tr-hint-gemini-transcribe" style="display:none;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
         ☁️ Audio is sent to Google's Gemini API for transcription — don't use this for confidential client content unless that's acceptable.<br>
         🎯 Real forced-alignment timestamps and automatic speaker labels (Speaker 1, Speaker 2…) when more than one speaker is detected — more accurate than the other Gemini option.<br>
-        💰 Costly — roughly 3-4x more expensive per minute of audio than the regular Gemini option. Use it when you actually need the accuracy/speaker labels, not as the default.
+        💰 Costly — roughly 3-4x more expensive per minute of audio than the regular Gemini option. Use it when you actually need the accuracy/speaker labels, not as the default.<br>
+        🌐 For heavily code-switched audio (frequent full sentences in a different language than the one you picked), a few of those sentences can get dropped or mangled. If that happens, try the regular Gemini option instead — it handles mixed-language speech more reliably.
       </div>
 
       <button class="submit-btn" onclick="submitTranscribe()">Transcribe</button>
