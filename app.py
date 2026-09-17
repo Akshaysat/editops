@@ -1814,7 +1814,19 @@ def gemini_transcribe(wav_path, language=None, romanize=False):
     client = _gemini_client()
     uploaded = client.files.upload(file=wav_path)
 
-    lang_hint = f' The spoken language is {LANGUAGE_NAMES.get(language, language)}.' if language else ''
+    # Phrased as "primary" rather than "the" language, with an explicit
+    # no-skip instruction — an earlier version ("The spoken language is
+    # Hindi.") read as exclusive and could cause the model to drop or
+    # garble a sentence that's actually spoken fully in another language
+    # (e.g. English) instead of transcribing it as-is.
+    lang_hint = (
+        f' The primary spoken language is {LANGUAGE_NAMES.get(language, language)}, '
+        'but some sentences may be spoken entirely in a different language '
+        '(e.g. English) — transcribe those exactly as spoken too. Never '
+        'omit, skip, or merge a sentence just because it is in a different '
+        'language than the primary one.'
+        if language else ''
+    )
     script_instruction = (
         ' Any Hindi/Urdu (or other non-Latin-script) speech must be written '
         'in casual Roman-script transliteration the way people actually type '
@@ -1872,11 +1884,21 @@ def gemini_transcribe_dedicated(wav_path, language=None, romanize=False):
     # ("custom_vocabulary is incompatible with word timestamps") — verified
     # against the live API. Timestamps are what this segments/SRT feature
     # actually needs, so vocabulary biasing isn't usable here.
+    #
+    # language_codes is a hard filter, not a hint — verified against the
+    # live API on a Hindi clip with one fully-English sentence spliced in.
+    # ['hi'] alone doesn't drop the English sentence, but force-decodes it
+    # phonetically into Devanagari garbage instead of English text.
+    # ['hi', 'en'] is worse: it drops every Hindi segment and keeps only
+    # the English one. Leaving it unset (auto-detect) was the only config
+    # that transcribed all three segments correctly — Hindi in Devanagari,
+    # English as real English — so it's never passed here regardless of
+    # the user's language selection.
     config = types.GenerateContentConfig(
         audio_transcription_config=types.AudioTranscriptionConfig(
             word_timestamp=True,
             diarization=True,
-            language_codes=[language] if language else None,
+            language_codes=None,
         )
     )
     response = client.models.generate_content(
