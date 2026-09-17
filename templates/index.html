@@ -964,6 +964,12 @@
         <span style="font-size:14px;">Romanize Hindi/Urdu text <span style="color:var(--muted);font-size:12px;">(Devanagari → Roman script, good for Hinglish)</span></span>
       </label>
 
+      <div class="field">
+        <label>Keywords to keep in English <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+        <input type="text" id="tr-keywords" placeholder="e.g. deadline, workflow, EditOps" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;">
+        <div class="hint">Comma-separated. These exact words stay in English and are never translated or transliterated, no matter what language surrounds them — useful for brand names, technical terms, or jargon mixed into another language.</div>
+      </div>
+
       <div class="hint" id="tr-hint-whisper" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
         ⚡ Runs on your M-series chip via Metal GPU &nbsp;·&nbsp; ~real-time speed<br>
         📦 First run downloads the model (~1.6 GB, cached after that)
@@ -2090,6 +2096,7 @@ function submitTranscribe() {
   const model    = document.getElementById('tr-model').value;
   const lang     = document.getElementById('tr-lang').value;
   const romanize = document.getElementById('tr-romanize').checked;
+  const keywords = document.getElementById('tr-keywords').value.trim();
 
   resetUI('transcribe');
   document.getElementById('tr-extra').innerHTML = '';
@@ -2099,6 +2106,7 @@ function submitTranscribe() {
   form.append('model', model);
   if (lang) form.append('language', lang);
   if (romanize) form.append('romanize', '1');
+  if (keywords) form.append('keywords', keywords);
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/transcribe');

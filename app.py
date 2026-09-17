@@ -1952,6 +1952,40 @@ def gemini_romanize_segments(segs):
     return [{**s, 'text': str(t).strip()} for s, t in zip(segs, parsed)]
 
 
+def gemini_enforce_keywords_english(segs, keywords):
+    """Rewrite any of `keywords` that ended up translated or transliterated
+    in `segs` back to their exact English spelling. Runs as a fixup pass
+    after transcription, applied the same way regardless of which of the
+    three transcription backends produced `segs` — including
+    gemini-3.5-transcribe, whose config-driven API has no prompt field to
+    steer at generation time, so a post-pass is the only mechanism that
+    reaches it. Returns a new list; raises on failure so the caller can
+    decide how to fall back.
+    """
+    client = _gemini_client()
+    keyword_list = ', '.join(f'"{k}"' for k in keywords)
+    prompt = (
+        'Here is a JSON array of transcript lines. The following words/terms '
+        f'must always appear exactly as given, in English, never translated '
+        f'or transliterated into another script or spelling, no matter what '
+        f'language surrounds them: {keyword_list}. Fix any line where one of '
+        'these terms was translated or transliterated instead of kept in '
+        'English. Leave everything else in each line unchanged, including '
+        'lines that don\'t contain any of these terms. Return ONLY a JSON '
+        'array of strings, same length and order as the input, no markdown, '
+        'no commentary.\n\n' +
+        json.dumps([s['text'] for s in segs], ensure_ascii=False)
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[prompt],
+    )
+    parsed = _parse_gemini_json(response)
+    if len(parsed) != len(segs):
+        raise ValueError('Gemini keyword-enforcement returned a different number of lines than sent.')
+    return [{**s, 'text': str(t).strip()} for s, t in zip(segs, parsed)]
+
+
 def segments_to_srt(segments):
     def fmt(t):
         h = int(t // 3600)
@@ -1974,6 +2008,7 @@ def transcribe_route():
     language = request.form.get('language') or None
     romanize = request.form.get('romanize') == '1'
     model    = request.form.get('model') or 'whisper'
+    keywords = [k.strip() for k in (request.form.get('keywords') or '').split(',') if k.strip()]
 
     # Odia isn't in local Whisper's supported language set (checked against
     # whisper.tokenizer.LANGUAGES) — fail fast with a clear message rather
@@ -2046,6 +2081,16 @@ def transcribe_route():
                     except Exception:
                         for s in segs:
                             s['text'] = romanize_text(s['text'])
+
+            if keywords:
+                _tasks[uid]['progress'] = 'Keeping keywords in English…'
+                try:
+                    segs = gemini_enforce_keywords_english(segs, keywords)
+                except Exception:
+                    # Best-effort — e.g. no Gemini key configured, or the
+                    # API call failed. Leave segs as transcribed rather
+                    # than fail the whole job over this optional extra.
+                    pass
 
             srt_path = os.path.join(TEMP_DIR, f'vt_tr_{uid}.srt')
             with open(srt_path, 'w', encoding='utf-8') as f:
