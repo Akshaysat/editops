@@ -2123,30 +2123,25 @@ def elevenlabs_tts(run_segments, voice_id, out_path):
         f.write(audio)
 
 
-def elevenlabs_separate_stems(wav_path, vocals_out_path, instrumental_out_path):
+def elevenlabs_extract_vocals(wav_path, vocals_out_path):
     """Split wav_path into "vocals" and "instrumental" stems via
-    ElevenLabs' Stem Separation, writing each to its own mp3 path. Both
-    stems keep the same timeline/duration as wav_path, so any segment
-    timestamps computed against wav_path (e.g. from Gemini) stay valid
-    against either one.
+    ElevenLabs' Stem Separation, keeping only the vocals one — a cleaner
+    source than the raw (music-underneath) audio to cut voice-cloning
+    samples from, since background music in a cloning sample gets baked
+    into the clone's timbre. Written to vocals_out_path as mp3, same
+    timeline/duration as wav_path, so segment timestamps computed
+    against wav_path (e.g. from Gemini) stay valid against it too.
 
-    Two uses for the two stems: the vocals stem is a cleaner source than
-    the raw (music-underneath) audio for voice cloning — see its use in
-    translate_dub_route() — and the instrumental stem is what gets mixed
-    back under the final dub later, so the output isn't a dry, isolated
-    voice-over.
-
-    stem_variation_id='two_stems_v1' is what gives exactly this vocals/
+    stem_variation_id='two_stems_v1' is what gives this vocals/
     instrumental split; the other allowed value, 'six_stems_v1', splits
     into vocals/drums/bass/guitar/piano/other, which would need summing
     5 stems back together for no benefit here — verified against the
     live API, which also confirmed the response is a ZIP containing
-    "vocals.mp3" and "instrumental.mp3".
+    "vocals.mp3" and "instrumental.mp3" (the latter unused here).
 
-    Neither use is required for the pipeline to work — the caller should
-    treat any failure here as "clone from the raw audio and skip
-    background music" rather than failing the whole job. Raises on
-    failure so the caller can decide.
+    Not required for the pipeline to work — the caller should treat any
+    failure here as "clone from the raw audio instead" rather than
+    failing the whole job. Raises on failure so the caller can decide.
     """
     boundary = uuid.uuid4().hex
     with open(wav_path, 'rb') as f:
@@ -2164,31 +2159,9 @@ def elevenlabs_separate_stems(wav_path, vocals_out_path, instrumental_out_path):
         headers={**_elevenlabs_headers(), 'Content-Type': f'multipart/form-data; boundary={boundary}'},
     )
     zip_bytes = _elevenlabs_call(req, timeout=180)
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        with zf.open('vocals.mp3') as src, open(vocals_out_path, 'wb') as dst:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf, zf.open('vocals.mp3') as src:
+        with open(vocals_out_path, 'wb') as dst:
             dst.write(src.read())
-        with zf.open('instrumental.mp3') as src, open(instrumental_out_path, 'wb') as dst:
-            dst.write(src.read())
-
-
-def mix_background_music(voice_path, music_path, out_path, music_volume_db=-18):
-    """Overlay `music_path` under `voice_path` — looped if shorter, cut
-    to match if longer, at a reduced volume so it sits behind the dubbed
-    dialogue rather than competing with it — and write the combined
-    mp3 to out_path. Best-effort: returns False (instead of raising) on
-    any ffmpeg failure, so the caller can fall back to the voice-only
-    track rather than losing the dub over an optional finishing touch.
-    """
-    r = subprocess.run(
-        ['ffmpeg', '-y',
-         '-i', voice_path,
-         '-stream_loop', '-1', '-i', music_path,
-         '-filter_complex',
-         f'[1:a]volume={music_volume_db}dB[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=0[out]',
-         '-map', '[out]', '-c:a', 'libmp3lame', out_path],
-        capture_output=True
-    )
-    return r.returncode == 0 and os.path.exists(out_path)
 
 
 def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
@@ -2534,17 +2507,15 @@ def translate_dub_route():
             # underneath the speaker. Best-effort: if this fails, clone
             # straight from the raw audio like before (voice-add's own
             # remove_background_noise=true is still applied as a fallback
-            # layer of cleaning either way) and skip background music in
-            # the final mix — never fail the whole job over this.
+            # layer of cleaning either way) — never fail the whole job
+            # over this.
             _tasks[uid]['progress'] = 'Separating vocals from background music… (ElevenLabs)'
-            vocals_path   = os.path.join(TEMP_DIR, f'vt_td_{uid}_vocals.mp3')
-            bg_music_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_bgmusic.mp3')
+            vocals_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_vocals.mp3')
             try:
-                elevenlabs_separate_stems(wav_path, vocals_path, bg_music_path)
+                elevenlabs_extract_vocals(wav_path, vocals_path)
                 clone_source = vocals_path
             except Exception:
                 vocals_path = None
-                bg_music_path = None
                 clone_source = wav_path
 
             _tasks[uid]['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
@@ -2563,8 +2534,6 @@ def translate_dub_route():
                 _tasks[uid] = {'status': 'error', 'error': 'Could not extract enough clean speaker audio to clone a voice.'}
                 cleanup_later(wav_path)
                 cleanup_later(input_path)
-                if bg_music_path:
-                    cleanup_later(bg_music_path)
                 return
 
             # A freshly cloned voice can take ~10-15s to propagate through
@@ -2581,7 +2550,6 @@ def translate_dub_route():
                 'segments': segments,
                 'target_language': target_language,
                 '_voice_ids': voice_ids,
-                '_bg_music_path': bg_music_path,
             }
             cleanup_later(wav_path)
             cleanup_later(input_path)
@@ -2614,8 +2582,7 @@ def translate_dub_generate_audio(task_id):
     if not edited_segments:
         return jsonify(error='No segments provided'), 400
 
-    voice_ids     = task.get('_voice_ids', {})
-    bg_music_path = task.get('_bg_music_path')
+    voice_ids = task.get('_voice_ids', {})
     task['status']   = 'processing_audio'
     task['progress'] = 'Generating speech… (ElevenLabs)'
 
@@ -2652,17 +2619,6 @@ def translate_dub_generate_audio(task_id):
 
             out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
             _stitch_audio_segments(clip_paths, gaps, out_path)
-
-            # Mix the source video's background music (extracted back in
-            # phase 1) under the dubbed voice, if it was captured. Best-
-            # effort — falls back to the voice-only track on any mixing
-            # failure rather than losing the dub over this finishing touch.
-            if bg_music_path and os.path.exists(bg_music_path):
-                mixed_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_mixed.mp3')
-                if mix_background_music(out_path, bg_music_path, mixed_path):
-                    cleanup_later(out_path, delay=5)
-                    out_path = mixed_path
-                cleanup_later(bg_music_path, delay=5)
 
             _tasks[task_id] = {
                 'status':   'done',
