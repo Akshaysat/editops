@@ -2666,6 +2666,56 @@ def translate_dub_result(task_id):
                      mimetype='audio/mpeg')
 
 
+# ── Titles & Description ────────────────────────────────────────────────────
+#
+# A separate, standalone feature from Transcribe and Translate & Dub — takes
+# a plain script (no video/audio involved) and generates YouTube title,
+# thumbnail text, and description options via a single Gemini text call.
+# Fast enough (a few seconds) to run synchronously rather than through the
+# async task/polling pattern the video-processing features use.
+
+def gemini_generate_metadata(script_text):
+    """Generate 3 options each for video title, thumbnail text, and
+    description from a script, via Gemini. Returns a dict with keys
+    "titles", "thumbnail_texts", "descriptions", each a list of up to 3
+    strings. Raises on failure."""
+    client = _gemini_client()
+    prompt = (
+        'Here is a video script. Based on it, generate YouTube content:\n\n'
+        '1) "titles": 3 distinct video title options — attention-grabbing '
+        'but accurate to the content, each under 70 characters.\n'
+        '2) "thumbnail_texts": 3 distinct short thumbnail overlay text '
+        'options — punchy, 2-6 words, the kind of bold text layered on a '
+        'YouTube thumbnail image, not a full sentence.\n'
+        '3) "descriptions": 3 distinct video description options for the '
+        'YouTube description box — 2-4 sentences each, summarizing the '
+        'video and hooking the viewer to watch.\n\n'
+        'Return ONLY a JSON object (no markdown, no commentary) with keys '
+        '"titles", "thumbnail_texts", "descriptions", each an array of '
+        'exactly 3 strings.\n\nSCRIPT:\n' + script_text
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[prompt],
+    )
+    parsed = _parse_gemini_json(response)
+    return {
+        key: [str(t).strip() for t in parsed.get(key, [])][:3]
+        for key in ('titles', 'thumbnail_texts', 'descriptions')
+    }
+
+
+@app.route('/generate-metadata', methods=['POST'])
+def generate_metadata_route():
+    script_text = (request.form.get('script') or '').strip()
+    if not script_text:
+        return jsonify(error='Please paste your script text first.'), 400
+    try:
+        return jsonify(gemini_generate_metadata(script_text))
+    except Exception as e:
+        return jsonify(error=str(e)[:300]), 500
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':

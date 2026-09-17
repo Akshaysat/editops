@@ -463,6 +463,20 @@
       background: rgba(0,0,0,0.05); box-shadow: 0 0 0 1.5px var(--text); border-radius: 3px;
     }
 
+    /* ── Titles & Description results ── */
+    .md-option {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+    }
+    .md-option:last-child { border-bottom: none; }
+    .md-option:hover { background: rgba(0,0,0,0.025); }
+    .md-option-text { flex: 1; color: var(--text); line-height: 1.5; }
+    .md-copy {
+      flex-shrink: 0; background: none; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); cursor: pointer; font-size: 12px; padding: 4px 10px; font-family: inherit;
+    }
+    .md-copy:hover { color: var(--text); border-color: var(--text); }
+
     /* ── Flagged-word count badge (used by Spelling QA) ── */
     .sp-badge { background: #E03131; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
 
@@ -665,6 +679,8 @@
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
+    <div class="nav-section">Content</div>
+    <button class="nav-item"        data-tab="metadata"   onclick="switchTab(this,'metadata')"><span class="ni">✎</span> Titles & Description</button>
     <div class="nav-section">Review</div>
     <button class="nav-item"        data-tab="qacheck"    onclick="switchTab(this,'qacheck')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
@@ -1088,6 +1104,28 @@
       <div class="result-box" id="rb-translatedub"></div>
       <div id="td-extra"></div>
       <div class="error-box"  id="eb-translatedub"></div>
+    </div>
+  </div>
+
+  <!-- ══ TITLES & DESCRIPTION ══ -->
+  <div id="panel-metadata" class="panel">
+    <div class="page-header"><h1>Titles & Description</h1><p>Paste your script and get thumbnail text, video title, and description options — three of each.</p></div>
+    <div class="card">
+      <h2>Titles & Description</h2>
+      <p class="desc">Titles & Description.</p>
+
+      <div class="field">
+        <label>Script</label>
+        <textarea id="md-script" rows="10" placeholder="Paste your video script here…" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+
+      <button class="submit-btn" onclick="submitGenerateMetadata()">Generate</button>
+      <div class="progress-wrap" id="pw-metadata">
+        <div class="progress-meta"><span id="pl-metadata">Generating…</span><span id="pp-metadata">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-metadata"></div></div>
+      </div>
+      <div class="error-box" id="eb-metadata"></div>
+      <div id="md-results"></div>
     </div>
   </div>
 
@@ -2662,6 +2700,63 @@ function pollDubAudio(taskId, startTime) {
       eb.classList.add('visible');
     }
   }, 2000);
+}
+
+// ── Titles & Description ─────────────────────────────────────────────────
+function submitGenerateMetadata() {
+  const script = document.getElementById('md-script').value.trim();
+  if (!script) return alert('Please paste your script text first.');
+
+  document.getElementById('eb-metadata').classList.remove('visible');
+  document.getElementById('md-results').innerHTML = '';
+  showProgress('metadata', 60, 'Generating…');
+
+  const form = new FormData();
+  form.append('script', script);
+
+  fetch('/generate-metadata', { method: 'POST', body: form })
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('pw-metadata').classList.remove('visible');
+      if (data.error) {
+        const eb = document.getElementById('eb-metadata');
+        eb.textContent = '✕ ' + data.error;
+        eb.classList.add('visible');
+        return;
+      }
+      renderMetadataResults(data);
+    })
+    .catch(() => {
+      document.getElementById('pw-metadata').classList.remove('visible');
+      const eb = document.getElementById('eb-metadata');
+      eb.textContent = '✕ Network error — is the server running?';
+      eb.classList.add('visible');
+    });
+}
+
+function renderMetadataResults(data) {
+  const section = (title, items) => {
+    const rows = (items || []).map(text => (
+      `<div class="md-option">` +
+        `<span class="md-option-text">${escHtml(text)}</span>` +
+        `<button class="md-copy" onclick="copyMetadataOption(this)" data-text="${escHtml(text)}">Copy</button>` +
+      `</div>`
+    )).join('');
+    return `<div class="tr-panel"><div class="tr-panel-header"><span>${title}</span></div><div class="tr-preview">${rows}</div></div>`;
+  };
+
+  document.getElementById('md-results').innerHTML =
+    section('Titles', data.titles) +
+    section('Thumbnail Text', data.thumbnail_texts) +
+    section('Descriptions', data.descriptions);
+}
+
+function copyMetadataOption(btn) {
+  navigator.clipboard.writeText(btn.dataset.text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
 }
 
 // ── Spelling QA ───────────────────────────────────────────────────────────
