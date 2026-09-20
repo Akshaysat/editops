@@ -204,7 +204,16 @@ def run_hw_encode(cmd_prefix, cmd_suffix, bv):
     if sys.platform == 'darwin':
         hw_vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1']
     elif os.name == 'nt':
-        hw_vcodec = ['-c:v', 'h264_qsv', '-b:v', bv]
+        # -preset veryfast: without an explicit preset, QSV defaults to
+        # "medium" — clearly slower than intended here, since the whole
+        # point of using QSV over libx264 is speed. -async_depth lets the
+        # encoder pipeline more frames concurrently through its internal
+        # queue instead of waiting on each one. Standard QSV performance-
+        # tuning flags (not something testable on this dev machine, which
+        # has no Intel Quick Sync hardware) — same automatic libx264
+        # fallback covers it if either flag causes trouble on a specific
+        # driver/ffmpeg build.
+        hw_vcodec = ['-c:v', 'h264_qsv', '-b:v', bv, '-preset', 'veryfast', '-async_depth', '4']
 
     sw_vcodec = ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
 
@@ -229,7 +238,9 @@ def run_hw_encode_crf(cmd_prefix, cmd_suffix, crf=18, preset='fast'):
     branch to begin with, so this only adds the new Windows path rather
     than also changing existing behavior elsewhere.
     """
-    hw_vcodec = ['-c:v', 'h264_qsv', '-global_quality', str(crf), '-look_ahead', '0'] \
+    # -preset veryfast + -async_depth: see run_hw_encode() for why.
+    hw_vcodec = ['-c:v', 'h264_qsv', '-global_quality', str(crf), '-look_ahead', '0',
+                 '-preset', 'veryfast', '-async_depth', '4'] \
                 if os.name == 'nt' else None
 
     sw_vcodec = ['-c:v', 'libx264', '-preset', preset, '-crf', str(crf)]
