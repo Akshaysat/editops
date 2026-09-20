@@ -187,6 +187,35 @@ def atempo_chain(speed):
     return ','.join(filters)
 
 
+def run_hw_encode(cmd_prefix, cmd_suffix, bv):
+    """Runs `cmd_prefix + vcodec + cmd_suffix`, trying the platform's
+    hardware H.264 encoder first — VideoToolbox on macOS, Quick Sync
+    (QSV) on Windows, both much faster than software libx264 encoding,
+    which matters most on weaker CPUs where this can be the difference
+    between usable and painfully slow — then transparently falling back
+    to libx264 if the hardware attempt fails (e.g. Quick Sync unavailable
+    or misconfigured on a specific Windows machine's GPU drivers) rather
+    than failing the whole job over an optional speed optimization that
+    isn't guaranteed to work on every machine. Returns the
+    CompletedProcess from whichever attempt succeeded (or the last
+    failed attempt, if none did).
+    """
+    hw_vcodec = None
+    if sys.platform == 'darwin':
+        hw_vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1']
+    elif os.name == 'nt':
+        hw_vcodec = ['-c:v', 'h264_qsv', '-b:v', bv]
+
+    sw_vcodec = ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
+
+    r = None
+    for vcodec in ([hw_vcodec] if hw_vcodec else []) + [sw_vcodec]:
+        r = subprocess.run(cmd_prefix + vcodec + cmd_suffix, capture_output=True)
+        if r.returncode == 0:
+            return r
+    return r
+
+
 def save_upload(file, fallback_ext='.mp4'):
     uid = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1] or fallback_ext
@@ -268,18 +297,9 @@ def speed_route():
     # Match original bitrate so quality is preserved
     bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
 
-    # Use Apple VideoToolbox hardware encoder on macOS (5-10x faster than libx264)
-    vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1'] \
-             if sys.platform == 'darwin' else \
-             ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
-
-    cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
-           '-filter_complex', fc, *maps,
-           *vcodec,
-           '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart',
-           output_path]
-
-    r = subprocess.run(cmd, capture_output=True)
+    cmd_prefix = ['ffmpeg', '-y', *t_limit, '-i', input_path, '-filter_complex', fc, *maps]
+    cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
+    r = run_hw_encode(cmd_prefix, cmd_suffix, bv)
     cleanup_later(input_path)
 
     if r.returncode != 0:
@@ -639,20 +659,13 @@ def thumbnail_route():
 
     # Match original bitrate so quality is preserved (same approach as /speed)
     bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
-    vcodec = ['-c:v', 'h264_videotoolbox', '-b:v', bv, '-allow_sw', '1'] \
-             if sys.platform == 'darwin' else \
-             ['-c:v', 'libx264', '-b:v', bv, '-preset', 'fast']
 
-    cmd = ['ffmpeg', '-y',
-           '-i', video_path,
-           '-loop', '1', '-t', str(duration), '-i', image_path,
-           '-filter_complex', fc, *maps,
-           *vcodec,
-           '-c:a', 'aac', '-b:a', '192k',
-           '-movflags', '+faststart',
-           output_path]
-
-    r = subprocess.run(cmd, capture_output=True)
+    cmd_prefix = ['ffmpeg', '-y',
+                  '-i', video_path,
+                  '-loop', '1', '-t', str(duration), '-i', image_path,
+                  '-filter_complex', fc, *maps]
+    cmd_suffix = ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', output_path]
+    r = run_hw_encode(cmd_prefix, cmd_suffix, bv)
     cleanup_later(video_path)
     cleanup_later(image_path)
 
