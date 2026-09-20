@@ -1937,6 +1937,30 @@ function showProgress(tab, pct, label) {
   pf.style.width = pct + '%';
 }
 
+// Formats a seconds count as "Ns" or "Nm Ss" for the upload-time estimate.
+function fmtUploadTime(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 1) return '<1s';
+  if (seconds < 60) return Math.round(seconds) + 's';
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return m + 'm ' + s + 's';
+}
+
+// Builds the "Uploading…" label with an estimated time remaining, from an
+// xhr.upload.onprogress event and the Date.now() captured right before
+// xhr.send(). Falls back to a plain label until there's enough data (first
+// ~0.5s) to estimate a transfer rate from.
+function uploadLabel(e, startTime) {
+  if (!e.lengthComputable || e.loaded <= 0) return 'Uploading…';
+  const elapsedSec = (Date.now() - startTime) / 1000;
+  if (elapsedSec < 0.5) return 'Uploading…';
+  const bytesPerSec  = e.loaded / elapsedSec;
+  const remainingSec = (e.total - e.loaded) / bytesPerSec;
+  const remaining = fmtUploadTime(remainingSec);
+  return remaining ? `Uploading… (${remaining} left)` : 'Uploading…';
+}
+
 function showResult(tab, filename, url, isPreview = false, xhr = null) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
@@ -2074,10 +2098,11 @@ function submit(tab, isPreview = false) {
   showProgress(tab, 0, 'Uploading…');
 
   // Upload progress: map 0–100% upload → 0–50% on the bar
+  const uploadStart = Date.now();
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
     const pct = Math.round(e.loaded / e.total * 50);
-    showProgress(tab, pct, 'Uploading…');
+    showProgress(tab, pct, uploadLabel(e, uploadStart));
   };
 
   // Upload finished — switch to processing state with fake % counter
@@ -2247,10 +2272,11 @@ function submitTranscribe() {
 
   showProgress('transcribe', 0, 'Uploading…');
 
+  const uploadStart = Date.now();
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
     const pct = Math.round(e.loaded / e.total * 30);
-    showProgress('transcribe', pct, 'Uploading…');
+    showProgress('transcribe', pct, uploadLabel(e, uploadStart));
   };
 
   xhr.upload.onload = () => {
@@ -2519,9 +2545,10 @@ function submitTranslateDub() {
 
   showProgress('translatedub', 0, 'Uploading…');
 
+  const uploadStart = Date.now();
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
-    showProgress('translatedub', Math.round(e.loaded / e.total * 20), 'Uploading…');
+    showProgress('translatedub', Math.round(e.loaded / e.total * 20), uploadLabel(e, uploadStart));
   };
 
   xhr.upload.onload = () => showProgress('translatedub', 25, 'Starting…');
@@ -2776,10 +2803,11 @@ function submitQACheck() {
 
   showProgress('qacheck', 0, 'Uploading…');
 
+  const uploadStart = Date.now();
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
     const pct = Math.round(e.loaded / e.total * 25);
-    showProgress('qacheck', pct, 'Uploading…');
+    showProgress('qacheck', pct, uploadLabel(e, uploadStart));
   };
 
   xhr.upload.onload = () => {
