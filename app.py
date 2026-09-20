@@ -2731,9 +2731,31 @@ if __name__ == '__main__':
         print('\n⚠️  ffmpeg not found! Please install it first.')
         print('   Mac:     brew install ffmpeg')
         print('   Windows: https://ffmpeg.org/download.html\n')
+
+    # On Windows only, prefer Waitress (a production WSGI server) over
+    # Flask's built-in dev server — Werkzeug's own dev server explicitly
+    # warns it isn't built for this, and on a shared Windows machine acting
+    # as a real server for multiple teammates, its I/O handling is a
+    # measurable bottleneck for large video uploads. macOS/Linux are
+    # untouched — every teammate running their own local copy keeps today's
+    # exact dev-server behavior; this only takes a different path when
+    # os.name == 'nt'.
+    if os.name == 'nt':
+        try:
+            from waitress import serve
+            print('\n✅  Starting server (Waitress — production WSGI server)...')
+            print('👉  Open your browser: http://localhost:5001')
+            print('    (Press Ctrl+C to stop)\n')
+            serve(app, host='0.0.0.0', port=5001, threads=6)
+        except ImportError:
+            print('\n⚠️  Waitress not installed — falling back to the dev server.')
+            print('   For faster uploads, run: pip install waitress\n')
+            print('✅  Starting server...')
+            print('👉  Open your browser: http://localhost:5001')
+            print('    (Press Ctrl+C to stop)\n')
+            app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)
     else:
         print('\n✅  Starting server...')
         print('👉  Open your browser: http://localhost:5001')
         print('    (Press Ctrl+C to stop)\n')
-
-    app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)
+        app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)
