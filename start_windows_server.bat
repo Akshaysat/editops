@@ -7,6 +7,7 @@ REM Whisper, Spelling QA, or SVG to After Effects. Use this instead of
 REM start_windows.bat on machines set up this way, so re-running it doesn't
 REM reinstall the heavy packages this deployment doesn't need.
 cd /d "%~dp0"
+set EDITOPS_REQUIREMENTS_FILE=requirements-server.txt
 
 echo.
 echo  EditOps -- Money Mediia (lite server build)

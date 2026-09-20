@@ -101,7 +101,14 @@ def auto_update():
         req_changed = subprocess.run(
             ['git', 'diff', old_head, 'HEAD', '--name-only'],
             cwd=repo_dir, capture_output=True, text=True).stdout
-        req_file = 'requirements-windows.txt' if os.name == 'nt' else 'requirements.txt'
+        # EDITOPS_REQUIREMENTS_FILE (set by start_windows_server.bat) takes
+        # priority over the OS-based guess below — without it, a lite-server
+        # deployment set up with requirements-server.txt would silently
+        # reinstall the full requirements-windows.txt on its next update,
+        # pulling back in openai-whisper/easyocr that setup deliberately
+        # left out.
+        req_file = os.environ.get('EDITOPS_REQUIREMENTS_FILE') or \
+                   ('requirements-windows.txt' if os.name == 'nt' else 'requirements.txt')
         pip_bin  = os.path.join('venv', 'Scripts', 'pip.exe') if os.name == 'nt' \
                    else os.path.join('venv', 'bin', 'pip')
         pip      = os.path.join(repo_dir, pip_bin)
@@ -124,6 +131,48 @@ def auto_update():
 
     except Exception as e:
         print(f'⚠️   Update check failed (continuing anyway): {e}')
+
+
+def start_periodic_auto_update():
+    """Opt-in only, via EDITOPS_AUTO_UPDATE_HOURS in .env — unset by
+    default, so every existing install (Mac and Windows alike) keeps
+    today's exact behavior: auto_update() runs once, at startup, and
+    that's it. Meant for an unattended server deployment where picking
+    up new commits without someone manually restarting it is the whole
+    point; not something a teammate actively using their own local copy
+    would want, since a restart drops whatever's mid-request at that
+    moment.
+
+    Re-checks every EDITOPS_AUTO_UPDATE_HOURS hours via the same
+    auto_update() used at startup, but skips (and retries next interval)
+    if a task is actively processing when the check fires, rather than
+    yanking the process out from under an in-progress job.
+    """
+    raw = os.environ.get('EDITOPS_AUTO_UPDATE_HOURS')
+    if not raw:
+        return
+    try:
+        interval_hours = float(raw)
+        if interval_hours <= 0:
+            raise ValueError
+    except ValueError:
+        print(f'⚠️   EDITOPS_AUTO_UPDATE_HOURS={raw!r} is not a valid positive '
+              f'number — periodic auto-update disabled.')
+        return
+
+    def _loop():
+        busy = {'processing', 'processing_audio'}
+        while True:
+            time.sleep(interval_hours * 3600)
+            if any(t.get('status') in busy for t in _tasks.values()):
+                print('🔄  Periodic update check skipped — a job is currently '
+                      'processing; will retry next interval.')
+                continue
+            print(f'\n🔄  Periodic update check (every {interval_hours}h)...')
+            auto_update()
+
+    threading.Thread(target=_loop, daemon=True).start()
+    print(f'🔁  Periodic auto-update enabled — checking every {interval_hours}h.')
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -2777,6 +2826,7 @@ if __name__ == '__main__':
 
     # Check for updates from GitHub
     auto_update()
+    start_periodic_auto_update()
 
     # Quick ffmpeg check
     check = subprocess.run(['ffmpeg', '-version'], capture_output=True)
