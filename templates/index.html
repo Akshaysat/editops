@@ -1961,9 +1961,22 @@ function uploadLabel(e, startTime) {
   return remaining ? `Uploading… (${remaining} left)` : 'Uploading…';
 }
 
-function showResult(tab, filename, url, isPreview = false, xhr = null) {
+// Builds the "Uploaded in Xs · Processed in Ys" summary line shown once a
+// job finishes, from millisecond durations. Either value may be omitted
+// (null) if not applicable to that feature/stage. Same look everywhere
+// via the shared .tr-stats class, on both Windows and Mac — this is pure
+// client-side timing, nothing server/OS-specific about it.
+function timingStatsHtml(uploadMs, processMs) {
+  const parts = [];
+  if (uploadMs  != null) parts.push(`Uploaded in ${fmtUploadTime(uploadMs / 1000)}`);
+  if (processMs != null) parts.push(`Processed in ${fmtUploadTime(processMs / 1000)}`);
+  return parts.length ? `<div class="tr-stats">${parts.join(' &nbsp;·&nbsp; ')}</div>` : '';
+}
+
+function showResult(tab, filename, url, isPreview = false, xhr = null, uploadMs = null, processMs = null) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
+  const timingHtml = isPreview ? '' : timingStatsHtml(uploadMs, processMs);
 
   if (tab === 'svg2aep') {
     const shapeCount = xhr ? xhr.getResponseHeader('X-Shape-Count') : null;
@@ -1978,6 +1991,7 @@ function showResult(tab, filename, url, isPreview = false, xhr = null) {
       : '';
     rb.innerHTML = `
       <div class="result-title">✓ Script generated — ${shapeCount || '?'} shape(s) converted</div>
+      ${timingHtml}
       <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>
       <div class="hint" style="margin-top:14px;text-align:left;">
         Open <b>After Effects</b> → <b>File → Scripts → Run Script File…</b> → select this file.
@@ -2004,6 +2018,7 @@ function showResult(tab, filename, url, isPreview = false, xhr = null) {
     } else {
       rb.innerHTML = `
         <div class="result-title">✓ Done! Your file is ready.</div>
+        ${timingHtml}
         ${player}
         <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>`;
     }
@@ -2013,6 +2028,7 @@ function showResult(tab, filename, url, isPreview = false, xhr = null) {
 
   rb.innerHTML = `
     <div class="result-title">✓ Done! Your file is ready.</div>
+    ${timingHtml}
     <a class="download-btn" href="${url}" download="${filename}">⬇ Download ${filename}</a>`;
   rb.classList.add('visible');
 }
@@ -2106,7 +2122,9 @@ function submit(tab, isPreview = false) {
   };
 
   // Upload finished — switch to processing state with fake % counter
+  let uploadEndTime = null;
   xhr.upload.onload = () => {
+    uploadEndTime = Date.now();
     document.getElementById('pl-' + tab).textContent = 'Processing…';
     const pf = document.getElementById('pf-' + tab);
     const pp = document.getElementById('pp-' + tab);
@@ -2114,14 +2132,13 @@ function submit(tab, isPreview = false) {
     pf.style.width = '88%';
     pp.textContent = '50%';
 
-    const startTime = Date.now();
     if (pf._ticker) clearInterval(pf._ticker);
     pf._ticker = setInterval(() => {
       if (!document.getElementById('pw-' + tab).classList.contains('visible')) {
         clearInterval(pf._ticker);
         return;
       }
-      const elapsed = Math.min(Date.now() - startTime, 90000);
+      const elapsed = Math.min(Date.now() - uploadEndTime, 90000);
       pp.textContent = Math.round(50 + elapsed / 90000 * 38) + '%';
     }, 250);
   };
@@ -2133,7 +2150,9 @@ function submit(tab, isPreview = false) {
       const m  = cd.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/);
       const filename = m ? decodeURIComponent(m[1]) : 'output.mp4';
       const url = URL.createObjectURL(xhr.response);
-      showResult(tab, filename, url, isPreview, xhr);
+      const uploadMs  = uploadEndTime ? uploadEndTime - uploadStart : null;
+      const processMs = uploadEndTime ? Date.now() - uploadEndTime : null;
+      showResult(tab, filename, url, isPreview, xhr, uploadMs, processMs);
     } else {
       xhr.response.text().then(text => {
         let msg = 'Processing failed. Please try again.';
@@ -2279,7 +2298,9 @@ function submitTranscribe() {
     showProgress('transcribe', pct, uploadLabel(e, uploadStart));
   };
 
+  let uploadEndTime = null;
   xhr.upload.onload = () => {
+    uploadEndTime = Date.now();
     document.getElementById('pl-transcribe').textContent = 'Starting transcription…';
     showProgress('transcribe', 35, 'Starting transcription…');
   };
@@ -2291,7 +2312,8 @@ function submitTranscribe() {
       return;
     }
     const taskId = xhr.response.task_id;
-    pollTranscribe(taskId, Date.now());
+    const uploadMs = uploadEndTime ? uploadEndTime - uploadStart : null;
+    pollTranscribe(taskId, Date.now(), uploadMs);
   };
 
   xhr.onerror = () => showError('transcribe', 'Network error — is the server running?');
@@ -2299,7 +2321,7 @@ function submitTranscribe() {
   xhr.send(form);
 }
 
-function pollTranscribe(taskId, startTime) {
+function pollTranscribe(taskId, startTime, uploadMs) {
   const pf = document.getElementById('pf-transcribe');
   const pp = document.getElementById('pp-transcribe');
   const pl = document.getElementById('pl-transcribe');
@@ -2339,7 +2361,7 @@ function pollTranscribe(taskId, startTime) {
       _trSegsOrig = (data.segments || []).map(s => ({...s}));
       _trFilename = data.filename || 'transcript.srt';
 
-      renderTranscriptResult(data.segments ? data.segments.length : 0, data.stats || null);
+      renderTranscriptResult(data.segments ? data.segments.length : 0, data.stats || null, uploadMs);
     } else {
       showError('transcribe', data.error || 'Transcription failed.');
     }
@@ -2370,7 +2392,7 @@ function fmtStatsDuration(s) {
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
 }
 
-function renderTranscriptResult(count, stats) {
+function renderTranscriptResult(count, stats, uploadMs) {
   const rb        = document.getElementById('rb-transcribe');
   const extra     = document.getElementById('tr-extra');
   const fileInput = document.getElementById('f-transcribe');
@@ -2385,7 +2407,9 @@ function renderTranscriptResult(count, stats) {
 
   let statsHtml = '';
   if (stats) {
+    const uploadPart = uploadMs != null ? `Uploaded in ${fmtStatsDuration(uploadMs / 1000)} &nbsp;·&nbsp; ` : '';
     statsHtml = `<div class="tr-stats">` +
+      uploadPart +
       `File: ${stats.file_size_mb} MB &nbsp;·&nbsp; ` +
       `Duration: ${fmtStatsDuration(stats.duration_sec)} &nbsp;·&nbsp; ` +
       `Transcribed in: ${fmtStatsDuration(stats.transcription_time_sec)}` +
@@ -2523,6 +2547,8 @@ function srtTimestamp(s) {
 let _tdSegs     = [];   // current translated segments (may be edited)
 let _tdSegsOrig = [];   // original from Gemini, for "reset to original"
 let _tdTaskId   = null;
+let _tdUploadMs  = null;  // set once, when the transcript first becomes ready
+let _tdProcessMs = null;
 
 function submitTranslateDub() {
   const file = document.getElementById('f-translatedub').files[0];
@@ -2551,14 +2577,19 @@ function submitTranslateDub() {
     showProgress('translatedub', Math.round(e.loaded / e.total * 20), uploadLabel(e, uploadStart));
   };
 
-  xhr.upload.onload = () => showProgress('translatedub', 25, 'Starting…');
+  let uploadEndTime = null;
+  xhr.upload.onload = () => {
+    uploadEndTime = Date.now();
+    showProgress('translatedub', 25, 'Starting…');
+  };
 
   xhr.onload = () => {
     if (xhr.status !== 200) {
       showError('translatedub', (xhr.response && xhr.response.error) || 'Upload failed.');
       return;
     }
-    pollTranslateDub(xhr.response.task_id, Date.now());
+    const uploadMs = uploadEndTime ? uploadEndTime - uploadStart : null;
+    pollTranslateDub(xhr.response.task_id, Date.now(), uploadMs);
   };
 
   xhr.onerror = () => showError('translatedub', 'Network error — is the server running?');
@@ -2566,7 +2597,7 @@ function submitTranslateDub() {
   xhr.send(form);
 }
 
-function pollTranslateDub(taskId, startTime) {
+function pollTranslateDub(taskId, startTime, uploadMs) {
   _tdTaskId = taskId;
   const pf = document.getElementById('pf-translatedub');
   const pp = document.getElementById('pp-translatedub');
@@ -2599,8 +2630,10 @@ function pollTranslateDub(taskId, startTime) {
 
     if (data.status === 'transcript_ready') {
       document.getElementById('pw-translatedub').classList.remove('visible');
-      _tdSegs     = data.segments.map(s => ({...s}));
-      _tdSegsOrig = data.segments.map(s => ({...s}));
+      _tdSegs      = data.segments.map(s => ({...s}));
+      _tdSegsOrig  = data.segments.map(s => ({...s}));
+      _tdUploadMs  = uploadMs;
+      _tdProcessMs = Date.now() - startTime;
       renderTranslateDubTranscript();
     } else {
       showError('translatedub', data.error || 'Translation failed.');
@@ -2610,7 +2643,9 @@ function pollTranslateDub(taskId, startTime) {
 
 function renderTranslateDubTranscript() {
   const rb = document.getElementById('rb-translatedub');
-  rb.innerHTML = `<div class="result-title">✓ Translated transcript ready — review and edit before generating audio.</div>`;
+  rb.innerHTML =
+    `<div class="result-title">✓ Translated transcript ready — review and edit before generating audio.</div>` +
+    timingStatsHtml(_tdUploadMs, _tdProcessMs);
   rb.classList.add('visible');
 
   const rows = _tdSegs.map((s, i) => (
@@ -2719,6 +2754,7 @@ function pollDubAudio(taskId, startTime) {
       const url = `/translate-dub/result/${taskId}`;
       document.getElementById('td-audio-result').innerHTML =
         `<div class="result-title">✓ Dubbed audio ready.</div>` +
+        timingStatsHtml(null, Date.now() - startTime) +
         `<div class="tr-player-wrap"><audio src="${url}" controls></audio></div>` +
         `<a class="download-btn" href="${url}" download="translated_audio.mp3">⬇ Download translated_audio.mp3</a>`;
     } else {
@@ -2810,7 +2846,9 @@ function submitQACheck() {
     showProgress('qacheck', pct, uploadLabel(e, uploadStart));
   };
 
+  let uploadEndTime = null;
   xhr.upload.onload = () => {
+    uploadEndTime = Date.now();
     showProgress('qacheck', 30, 'Extracting frames…');
   };
 
@@ -2820,7 +2858,8 @@ function submitQACheck() {
       showError('qacheck', msg);
       return;
     }
-    pollQACheck(xhr.response.task_id, Date.now());
+    const uploadMs = uploadEndTime ? uploadEndTime - uploadStart : null;
+    pollQACheck(xhr.response.task_id, Date.now(), uploadMs);
   };
 
   xhr.onerror = () => showError('qacheck', 'Network error — is the server running?');
@@ -2828,7 +2867,7 @@ function submitQACheck() {
   xhr.send(form);
 }
 
-function pollQACheck(taskId, startTime) {
+function pollQACheck(taskId, startTime, uploadMs) {
   const pf = document.getElementById('pf-qacheck');
   const pp = document.getElementById('pp-qacheck');
   const pl = document.getElementById('pl-qacheck');
@@ -2862,14 +2901,14 @@ function pollQACheck(taskId, startTime) {
 
     if (data.status === 'done') {
       document.getElementById('pw-qacheck').classList.remove('visible');
-      renderQAResult(data);
+      renderQAResult(data, uploadMs, Date.now() - startTime);
     } else {
       showError('qacheck', data.error || 'Scan failed.');
     }
   }, 2000);
 }
 
-function renderQAResult(data) {
+function renderQAResult(data, uploadMs, processMs) {
   const rb        = document.getElementById('rb-qacheck');
   const extra     = document.getElementById('qa-extra');
   const fileInput = document.getElementById('f-qacheck');
@@ -2883,6 +2922,7 @@ function renderQAResult(data) {
   const count = data.issues.length;
   rb.innerHTML = `
     <div class="result-title">${count ? '⚠️ ' + count + ' possible spelling issue' + (count === 1 ? '' : 's') + ' found' : '✓ No spelling issues found'}</div>
+    ${timingStatsHtml(uploadMs, processMs)}
     ${playerHtml}
     <div style="font-size:12px;color:var(--muted);">Scanned ${data.frames_scanned} sampled frame${data.frames_scanned === 1 ? '' : 's'} across ${fmtTranscriptTime(data.duration)}.</div>`;
   rb.classList.add('visible');
