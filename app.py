@@ -216,6 +216,32 @@ def run_hw_encode(cmd_prefix, cmd_suffix, bv):
     return r
 
 
+def run_hw_encode_crf(cmd_prefix, cmd_suffix, crf=18, preset='fast'):
+    """CRF/quality-based counterpart to run_hw_encode(), for routes with
+    no fixed bitrate target — e.g. concatenating clips of unknown/mixed
+    source bitrate, where "match the original bitrate" doesn't apply.
+    On Windows, tries Quick Sync's closest equivalent to CRF
+    (-global_quality — same numeric range and "lower is higher quality"
+    semantics) first, falling back to plain libx264 CRF if that fails.
+
+    macOS/Linux always use libx264 here unchanged — unlike Speed Up and
+    Thumbnail, the routes calling this never had a hardware-encoder
+    branch to begin with, so this only adds the new Windows path rather
+    than also changing existing behavior elsewhere.
+    """
+    hw_vcodec = ['-c:v', 'h264_qsv', '-global_quality', str(crf), '-look_ahead', '0'] \
+                if os.name == 'nt' else None
+
+    sw_vcodec = ['-c:v', 'libx264', '-preset', preset, '-crf', str(crf)]
+
+    r = None
+    for vcodec in ([hw_vcodec] if hw_vcodec else []) + [sw_vcodec]:
+        r = subprocess.run(cmd_prefix + vcodec + cmd_suffix, capture_output=True)
+        if r.returncode == 0:
+            return r
+    return r
+
+
 def save_upload(file, fallback_ext='.mp4'):
     uid = str(uuid.uuid4())
     ext = os.path.splitext(file.filename)[1] or fallback_ext
@@ -559,20 +585,18 @@ def merge_route():
     if is_video_merge:
         output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
         # Explicit mapping and stereo downmix — see /convert for why.
-        cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-               '-map', '0:v:0?', '-map', '0:a:0?',
-               '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
-               '-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart',
-               output_path]
+        cmd_prefix = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+                      '-map', '0:v:0?', '-map', '0:a:0?']
+        cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
         download_name = 'merged_video.mp4'
+        r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
     else:
         output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
                '-c:a', 'libmp3lame', '-b:a', '192k',
                output_path]
         download_name = 'merged_audio.mp3'
-
-    r = subprocess.run(cmd, capture_output=True)
+        r = subprocess.run(cmd, capture_output=True)
 
     cleanup_later(concat_path)
     for p in input_paths:
@@ -740,12 +764,17 @@ def convert_route():
         # play it, which reads to a user as "audio completely missing" even
         # though the conversion "succeeded". Downmixing to stereo sidesteps
         # the whole class of multichannel-layout compatibility problems.
-        cmd = ['ffmpeg', '-y', '-i', input_path,
-               '-map', '0:v:0?', '-map', '0:a:0?',
-               '-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18',
-               '-c:a', cfg['acodec'], '-ac', '2', '-b:a', '192k',
-               '-movflags', '+faststart', output_path]
-        r = subprocess.run(cmd, capture_output=True)
+        cmd_prefix = ['ffmpeg', '-y', '-i', input_path, '-map', '0:v:0?', '-map', '0:a:0?']
+        cmd_suffix = ['-c:a', cfg['acodec'], '-ac', '2', '-b:a', '192k',
+                      '-movflags', '+faststart', output_path]
+        if cfg['vcodec'] == 'libx264':
+            # Only H.264 targets (mp4/mov/mkv) have a Quick Sync
+            # equivalent on this hardware — avi (Xvid) and webm (VP9)
+            # stay on their existing software encoders unconditionally.
+            r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
+        else:
+            cmd = cmd_prefix + ['-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18'] + cmd_suffix
+            r = subprocess.run(cmd, capture_output=True)
 
     cleanup_later(input_path)
 
