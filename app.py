@@ -2176,46 +2176,6 @@ def elevenlabs_clone_voice(sample_paths, name):
     return json.loads(_elevenlabs_call(req, timeout=120))['voice_id']
 
 
-def elevenlabs_delete_voice(voice_id):
-    """Delete a cloned voice. Each Translate & Dub job clones a fresh
-    voice per speaker from that job's own source audio — nothing in the
-    app reuses a cloned voice across jobs — so once a job's dub audio is
-    generated, its clones are pure dead weight against the account's
-    custom-voice cap. Best-effort: a failed delete here shouldn't fail
-    the job that already produced its result."""
-    req = urllib.request.Request(
-        f'https://api.elevenlabs.io/v1/voices/{voice_id}',
-        method='DELETE',
-        headers=_elevenlabs_headers(),
-    )
-    _elevenlabs_call(req, timeout=30)
-
-
-def cleanup_abandoned_voices(task_id, voice_ids, delay=7200):
-    """Delete a Translate & Dub job's cloned voices if the job is
-    abandoned after transcription — the user never clicks "Lock
-    Transcript & Generate Audio" — since translate_dub_generate_audio()
-    is the only other place voice_ids ever gets cleaned up, and it only
-    runs if that route is actually called. Without this, an abandoned
-    review (tab closed, never finished) leaves its clones stranded
-    forever, the same leak this whole cleanup effort was fixing.
-
-    Waits `delay` seconds (default 2h — comfortably longer than any real
-    review session) then deletes only if the task is still sitting in
-    'transcript_ready': if generate-audio was already called, that route
-    owns the cleanup instead, and re-deleting here would race with (or
-    duplicate) it."""
-    def _del():
-        time.sleep(delay)
-        task = _tasks.get(task_id)
-        if not task or task.get('status') != 'transcript_ready':
-            return
-        for voice_id in voice_ids.values():
-            try: elevenlabs_delete_voice(voice_id)
-            except Exception: pass
-    threading.Thread(target=_del, daemon=True).start()
-
-
 def elevenlabs_tts(run_segments, voice_id, out_path):
     """Generate ONE continuous speech clip on Eleven v3 for `run_segments`
     — a list of {text, emotion} dicts, in order, all from the same
@@ -2324,13 +2284,10 @@ def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
     where a different speaker was talking — unlike concatenating several
     separate extracts together, one continuous cut can't introduce a
     splice artifact. Falls back to the single longest run for a speaker
-    if none reach `min_clip_duration` on their own, padding it with a
-    bit of surrounding audio if even that longest run is still under
-    ElevenLabs' hard 4.6s floor, rather than silently producing no
-    clips at all. `speaker` may be None to mean "use the whole track"
-    (single-speaker audio — the whole list is one run).
+    if none reach `min_clip_duration` on their own, rather than silently
+    producing no clips at all. `speaker` may be None to mean "use the
+    whole track" (single-speaker audio — the whole list is one run).
     Returns the list of written file paths (possibly empty)."""
-    ELEVENLABS_MIN_SAMPLE_SECONDS = 4.7  # 4.6s + a small safety margin
     runs, current = [], []
     for s in segments:
         if (s.get('speaker') == speaker) if speaker else True:
@@ -2346,28 +2303,14 @@ def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
     if long_enough:
         windows = long_enough
     elif windows:
-        # Nothing reaches min_clip_duration — take the single longest run
-        # available, and if even that falls short of ElevenLabs' hard
-        # 4.6s minimum, pad it with a little surrounding audio (clamped
-        # to the file's bounds) rather than sending a clip guaranteed to
-        # be rejected as audio_too_short.
-        start, end = max(windows, key=lambda w: w[1] - w[0])
-        if end - start < ELEVENLABS_MIN_SAMPLE_SECONDS:
-            needed = ELEVENLABS_MIN_SAMPLE_SECONDS - (end - start)
-            file_info = ffprobe_info(wav_path)
-            file_duration = file_info['duration'] if file_info else end
-            start = max(0.0, start - needed / 2)
-            end = min(file_duration, start + (end - start) + needed)
-            start = max(0.0, end - ELEVENLABS_MIN_SAMPLE_SECONDS)
-        windows = [(start, end)]
+        windows = [max(windows, key=lambda w: w[1] - w[0])]
     windows.sort(key=lambda w: w[1] - w[0], reverse=True)
 
     paths, total = [], 0.0
     for i, (start, end) in enumerate(windows):
-        remaining = max_total_duration - total
-        if remaining < ELEVENLABS_MIN_SAMPLE_SECONDS or len(paths) >= max_clips:
+        if total >= max_total_duration or len(paths) >= max_clips:
             break
-        dur = min(end - start, remaining)
+        dur = min(end - start, max_total_duration - total)
         clip_path = os.path.join(out_dir, f'vt_td_{tag}_voiceclip_{i}.wav')
         subprocess.run(
             ['ffmpeg', '-y', '-ss', str(start), '-t', str(dur), '-i', wav_path, clip_path],
@@ -2736,7 +2679,6 @@ def translate_dub_route():
                 'target_language': target_language,
                 '_voice_ids': voice_ids,
             }
-            cleanup_abandoned_voices(uid, voice_ids)
             cleanup_later(wav_path)
             cleanup_later(input_path)
         except Exception as e:
@@ -2807,19 +2749,6 @@ def translate_dub_generate_audio(task_id):
             for p in clip_paths:
                 try: cleanup_later(p, delay=5)
                 except: pass
-        finally:
-            # Each job clones a fresh voice per speaker from its own
-            # source audio — nothing reuses a cloned voice across jobs,
-            # and this is the only call site that ever consumes
-            # voice_ids — so once generation is done (success or
-            # failure), these clones are safe to delete. Left uncleaned,
-            # they silently pile up against ElevenLabs' custom-voice cap
-            # (hit in real use after ~8 jobs) and start failing brand
-            # new jobs at the cloning step with no connection to what
-            # actually caused it.
-            for voice_id in voice_ids.values():
-                try: elevenlabs_delete_voice(voice_id)
-                except Exception: pass
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify(status='processing_audio')
