@@ -2176,6 +2176,21 @@ def elevenlabs_clone_voice(sample_paths, name):
     return json.loads(_elevenlabs_call(req, timeout=120))['voice_id']
 
 
+def elevenlabs_delete_voice(voice_id):
+    """Delete a cloned voice. Each Translate & Dub job clones a fresh
+    voice per speaker from that job's own source audio — nothing in the
+    app reuses a cloned voice across jobs — so once a job's dub audio is
+    generated, its clones are pure dead weight against the account's
+    custom-voice cap. Best-effort: a failed delete here shouldn't fail
+    the job that already produced its result."""
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/voices/{voice_id}',
+        method='DELETE',
+        headers=_elevenlabs_headers(),
+    )
+    _elevenlabs_call(req, timeout=30)
+
+
 def elevenlabs_tts(run_segments, voice_id, out_path):
     """Generate ONE continuous speech clip on Eleven v3 for `run_segments`
     — a list of {text, emotion} dicts, in order, all from the same
@@ -2766,6 +2781,19 @@ def translate_dub_generate_audio(task_id):
             for p in clip_paths:
                 try: cleanup_later(p, delay=5)
                 except: pass
+        finally:
+            # Each job clones a fresh voice per speaker from its own
+            # source audio — nothing reuses a cloned voice across jobs,
+            # and this is the only call site that ever consumes
+            # voice_ids — so once generation is done (success or
+            # failure), these clones are safe to delete. Left uncleaned,
+            # they silently pile up against ElevenLabs' custom-voice cap
+            # (hit in real use after ~8 jobs) and start failing brand
+            # new jobs at the cloning step with no connection to what
+            # actually caused it.
+            for voice_id in voice_ids.values():
+                try: elevenlabs_delete_voice(voice_id)
+                except Exception: pass
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify(status='processing_audio')
