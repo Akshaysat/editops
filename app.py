@@ -2191,6 +2191,31 @@ def elevenlabs_delete_voice(voice_id):
     _elevenlabs_call(req, timeout=30)
 
 
+def cleanup_abandoned_voices(task_id, voice_ids, delay=7200):
+    """Delete a Translate & Dub job's cloned voices if the job is
+    abandoned after transcription — the user never clicks "Lock
+    Transcript & Generate Audio" — since translate_dub_generate_audio()
+    is the only other place voice_ids ever gets cleaned up, and it only
+    runs if that route is actually called. Without this, an abandoned
+    review (tab closed, never finished) leaves its clones stranded
+    forever, the same leak this whole cleanup effort was fixing.
+
+    Waits `delay` seconds (default 2h — comfortably longer than any real
+    review session) then deletes only if the task is still sitting in
+    'transcript_ready': if generate-audio was already called, that route
+    owns the cleanup instead, and re-deleting here would race with (or
+    duplicate) it."""
+    def _del():
+        time.sleep(delay)
+        task = _tasks.get(task_id)
+        if not task or task.get('status') != 'transcript_ready':
+            return
+        for voice_id in voice_ids.values():
+            try: elevenlabs_delete_voice(voice_id)
+            except Exception: pass
+    threading.Thread(target=_del, daemon=True).start()
+
+
 def elevenlabs_tts(run_segments, voice_id, out_path):
     """Generate ONE continuous speech clip on Eleven v3 for `run_segments`
     — a list of {text, emotion} dicts, in order, all from the same
@@ -2711,6 +2736,7 @@ def translate_dub_route():
                 'target_language': target_language,
                 '_voice_ids': voice_ids,
             }
+            cleanup_abandoned_voices(uid, voice_ids)
             cleanup_later(wav_path)
             cleanup_later(input_path)
         except Exception as e:
