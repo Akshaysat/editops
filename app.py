@@ -2360,6 +2360,17 @@ def gemini_translate_with_emotion(wav_path, target_language, source_language=Non
         'normally is fine and often sounds more natural — use judgment '
         'the way a fluent bilingual speaker code-switches, not a rigid '
         'rule applied to every single English word. '
+        '2.5) For each segment, keep the translation roughly similar in '
+        'spoken length to how long that same segment took to say in the '
+        'source audio (the "start" and "end" times you are determining '
+        'for it) — phrase it so a natural speaker would take about that '
+        'same amount of time to say it aloud, not noticeably longer or '
+        'shorter. This matters because the translation will be dubbed as '
+        'new audio replacing the original, and needs to roughly fit the '
+        'same time window. Prefer concise, natural phrasing over a longer '
+        'literal translation when both convey the same meaning — but '
+        'never sacrifice clarity, accuracy, or naturalness just to hit a '
+        'length target. '
         '3) Identify which distinct speaker is talking by voice, labeled '
         'consistently as "Speaker 1", "Speaker 2" etc. in order of first '
         'appearance (omit this field if you can only detect one speaker). '
@@ -2574,6 +2585,51 @@ def _stitch_audio_segments(clip_paths, gap_durations, out_path):
         except Exception: pass
 
 
+def _match_audio_duration(in_path, target_duration, out_path, max_adjust=0.08):
+    """Uniformly speed up or slow down in_path (via ffmpeg atempo) so its
+    duration is closer to target_duration (the source video's duration),
+    writing to out_path. This is a safety net for whatever drift remains
+    after gemini_translate_with_emotion()'s translation prompt already
+    asks for a duration-matched translation — not the primary mechanism.
+
+    Capped tightly, at +/- max_adjust (default 8%, down from an earlier
+    25% cap): atempo is a generic waveform time-stretcher built for
+    music, not speech, and real testing showed it sounding noticeably
+    robotic at larger stretch amounts. A small stretch is far less
+    perceptible than a large one, so keeping this correction small only
+    works if most of the drift was already prevented upstream, in the
+    translation itself, rather than leaning on this to do the heavy
+    lifting. Beyond the cap, the closest safe speed is applied and
+    residual drift is left rather than degrading the audio further.
+    Skipped if the natural difference is already under 2%.
+
+    Returns (final_path, was_capped) — final_path is out_path if an
+    adjustment was applied, or the original in_path unchanged if no
+    adjustment was needed or the ffmpeg step failed; was_capped is True
+    if the correction hit the +/- max_adjust limit rather than fully
+    closing the gap.
+    """
+    info = ffprobe_info(in_path)
+    if not info or not target_duration or info['duration'] <= 0:
+        return in_path, False
+
+    raw_speed = info['duration'] / target_duration
+    speed = max(1 - max_adjust, min(1 + max_adjust, raw_speed))
+    was_capped = abs(speed - raw_speed) > 0.001
+
+    if abs(speed - 1.0) < 0.02:
+        return in_path, was_capped
+
+    r = subprocess.run(
+        ['ffmpeg', '-y', '-i', in_path, '-filter:a', atempo_chain(speed),
+         '-c:a', 'libmp3lame', out_path],
+        capture_output=True
+    )
+    if r.returncode == 0 and os.path.exists(out_path):
+        return out_path, was_capped
+    return in_path, was_capped
+
+
 def _group_segments_into_runs(kept, max_chars=4000):
     """Group consecutive same-speaker segments into runs, each destined
     to become a single TTS call — see elevenlabs_tts() for why merging
@@ -2625,6 +2681,9 @@ def translate_dub_route():
                 _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from file.'}
                 cleanup_later(input_path)
                 return
+
+            source_info = ffprobe_info(wav_path)
+            source_duration = source_info['duration'] if source_info else None
 
             _tasks[uid]['progress'] = 'Transcribing, translating, and reading emotion… (Gemini)'
             segments = gemini_translate_with_emotion(wav_path, target_language, source_language)
@@ -2678,6 +2737,7 @@ def translate_dub_route():
                 'segments': segments,
                 'target_language': target_language,
                 '_voice_ids': voice_ids,
+                '_source_duration': source_duration,
             }
             cleanup_later(wav_path)
             cleanup_later(input_path)
@@ -2710,7 +2770,8 @@ def translate_dub_generate_audio(task_id):
     if not edited_segments:
         return jsonify(error='No segments provided'), 400
 
-    voice_ids = task.get('_voice_ids', {})
+    voice_ids       = task.get('_voice_ids', {})
+    source_duration = task.get('_source_duration')
     task['status']   = 'processing_audio'
     task['progress'] = 'Generating speech… (ElevenLabs)'
 
@@ -2736,11 +2797,21 @@ def translate_dub_generate_audio(task_id):
             out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
             _stitch_audio_segments(clip_paths, gaps, out_path)
 
+            # Gentle safety net for whatever duration drift remains after
+            # the translation prompt's own length-awareness — see
+            # _match_audio_duration() for why this is capped tight (8%)
+            # rather than doing the heavy lifting itself.
+            matched_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_matched.mp3')
+            final_path, duration_capped = _match_audio_duration(out_path, source_duration, matched_path)
+            if final_path != out_path:
+                cleanup_later(out_path, delay=5)
+
             _tasks[task_id] = {
-                'status':   'done',
-                'result':   out_path,
-                'filename': 'translated_audio.mp3',
-                'segments': kept,
+                'status':          'done',
+                'result':          final_path,
+                'filename':        'translated_audio.mp3',
+                'segments':        kept,
+                'duration_capped': duration_capped,
             }
             for p in clip_paths:
                 cleanup_later(p, delay=5)
