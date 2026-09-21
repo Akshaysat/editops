@@ -2571,6 +2571,34 @@ def transcribe_result(task_id):
                      mimetype='text/plain')
 
 
+def _trim_edge_silence(in_path, out_path, keep=0.2, threshold_db=-35):
+    """Trim excess silence from the very start and end of a generated TTS
+    clip, leaving up to `keep` seconds as a natural buffer. eleven_v3
+    sometimes bakes in far more trailing silence than the spoken text
+    warrants — especially on short one-word/interjection lines carrying
+    an emotion Audio Tag — up to a full second or more of dead air after
+    the words end. Since inter-run gaps in the final dub are otherwise
+    driven entirely by the source video's real timing (see
+    _stitch_audio_segments()), that stray silence has nothing to do with
+    the source and shows up as an unexplained pause after a speaker
+    finishes a line. Reversing the stream around the same start-trim
+    filter touches only the true leading/trailing silence, not any
+    natural pauses in the middle of a multi-sentence run. Returns
+    out_path on success, or in_path unchanged if the ffmpeg step fails."""
+    trim = (
+        f'silenceremove=start_periods=1:start_threshold={threshold_db}dB:'
+        f'start_silence={keep}:start_duration=0.1'
+    )
+    r = subprocess.run(
+        ['ffmpeg', '-y', '-i', in_path, '-af', f'{trim},areverse,{trim},areverse',
+         '-c:a', 'libmp3lame', out_path],
+        capture_output=True
+    )
+    if r.returncode == 0 and os.path.exists(out_path):
+        return out_path
+    return in_path
+
+
 def _stitch_audio_segments(clip_paths, gap_durations, out_path):
     """Concatenate clip_paths in order, inserting a silence gap (seconds,
     capped at 3s) from gap_durations[i] after clip i. Approximates the
@@ -2804,7 +2832,11 @@ def translate_dub_generate_audio(task_id):
                             or next(iter(voice_ids.values())))
                 clip_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_clip_{i}.mp3')
                 elevenlabs_tts(run_segs, voice_id, clip_path)
-                clip_paths.append(clip_path)
+                trimmed_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}_clip_{i}_trimmed.mp3')
+                final_clip_path = _trim_edge_silence(clip_path, trimmed_path)
+                if final_clip_path != clip_path:
+                    cleanup_later(clip_path, delay=5)
+                clip_paths.append(final_clip_path)
 
             gaps = [
                 max(0.0, runs[i + 1][0]['start'] - runs[i][-1]['end']) if i + 1 < len(runs) else 0.0
