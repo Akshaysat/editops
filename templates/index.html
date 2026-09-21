@@ -2455,7 +2455,11 @@ function renderTranscriptResult(count, stats, uploadMs) {
       `<div class="tr-preview" id="tr-preview">${rows}</div>` +
       `</div>` +
       `<div class="tr-panel">` +
-      `<div class="tr-panel-header"><span>Full Script</span><button class="tr-script-copy" onclick="copyScript(this)">Copy</button></div>` +
+      `<div class="tr-panel-header"><span>Full Script</span>` +
+      `<span class="tr-panel-actions">` +
+      `<button class="tr-script-copy" onclick="copyScript(this)">Copy</button>` +
+      `<button class="tr-script-copy" onclick="copyScriptWithTimestamps(this)">Copy with Timestamps</button>` +
+      `</span></div>` +
       `<div class="tr-script-body" id="tr-script-body">${escHtml(_trSegs.map(s => s.text.trim()).join(' '))}</div>` +
       `</div>`;
   }
@@ -2528,6 +2532,17 @@ function downloadTranscript() {
 
 function copyScript(btn) {
   const text = _trSegs.map(s => s.text.trim()).join(' ');
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+function copyScriptWithTimestamps(btn) {
+  const text = _trSegs.map(s =>
+    `${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}  ${s.text.trim()}`
+  ).join('\n');
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
     btn.textContent = 'Copied!';
