@@ -2284,10 +2284,13 @@ def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
     where a different speaker was talking — unlike concatenating several
     separate extracts together, one continuous cut can't introduce a
     splice artifact. Falls back to the single longest run for a speaker
-    if none reach `min_clip_duration` on their own, rather than silently
-    producing no clips at all. `speaker` may be None to mean "use the
-    whole track" (single-speaker audio — the whole list is one run).
+    if none reach `min_clip_duration` on their own, padding it with a
+    bit of surrounding audio if even that longest run is still under
+    ElevenLabs' hard 4.6s floor, rather than silently producing no
+    clips at all. `speaker` may be None to mean "use the whole track"
+    (single-speaker audio — the whole list is one run).
     Returns the list of written file paths (possibly empty)."""
+    ELEVENLABS_MIN_SAMPLE_SECONDS = 4.7  # 4.6s + a small safety margin
     runs, current = [], []
     for s in segments:
         if (s.get('speaker') == speaker) if speaker else True:
@@ -2303,14 +2306,28 @@ def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
     if long_enough:
         windows = long_enough
     elif windows:
-        windows = [max(windows, key=lambda w: w[1] - w[0])]
+        # Nothing reaches min_clip_duration — take the single longest run
+        # available, and if even that falls short of ElevenLabs' hard
+        # 4.6s minimum, pad it with a little surrounding audio (clamped
+        # to the file's bounds) rather than sending a clip guaranteed to
+        # be rejected as audio_too_short.
+        start, end = max(windows, key=lambda w: w[1] - w[0])
+        if end - start < ELEVENLABS_MIN_SAMPLE_SECONDS:
+            needed = ELEVENLABS_MIN_SAMPLE_SECONDS - (end - start)
+            file_info = ffprobe_info(wav_path)
+            file_duration = file_info['duration'] if file_info else end
+            start = max(0.0, start - needed / 2)
+            end = min(file_duration, start + (end - start) + needed)
+            start = max(0.0, end - ELEVENLABS_MIN_SAMPLE_SECONDS)
+        windows = [(start, end)]
     windows.sort(key=lambda w: w[1] - w[0], reverse=True)
 
     paths, total = [], 0.0
     for i, (start, end) in enumerate(windows):
-        if total >= max_total_duration or len(paths) >= max_clips:
+        remaining = max_total_duration - total
+        if remaining < ELEVENLABS_MIN_SAMPLE_SECONDS or len(paths) >= max_clips:
             break
-        dur = min(end - start, max_total_duration - total)
+        dur = min(end - start, remaining)
         clip_path = os.path.join(out_dir, f'vt_td_{tag}_voiceclip_{i}.wav')
         subprocess.run(
             ['ffmpeg', '-y', '-ss', str(start), '-t', str(dur), '-i', wav_path, clip_path],
