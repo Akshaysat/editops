@@ -2176,6 +2176,46 @@ def elevenlabs_clone_voice(sample_paths, name):
     return json.loads(_elevenlabs_call(req, timeout=120))['voice_id']
 
 
+def elevenlabs_delete_voice(voice_id):
+    """Delete a cloned voice. Each Translate & Dub job clones a fresh
+    voice per speaker from that job's own source audio — nothing in the
+    app reuses a cloned voice across jobs — so once a job's dub audio is
+    generated, its clones are pure dead weight against the account's
+    custom-voice cap. Best-effort: a failed delete here shouldn't fail
+    the job that already produced its result."""
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/voices/{voice_id}',
+        method='DELETE',
+        headers=_elevenlabs_headers(),
+    )
+    _elevenlabs_call(req, timeout=30)
+
+
+def cleanup_abandoned_voices(task_id, voice_ids, delay=7200):
+    """Delete a Translate & Dub job's cloned voices if the job is
+    abandoned after transcription — the user never clicks "Lock
+    Transcript & Generate Audio" — since translate_dub_generate_audio()
+    is the only other place voice_ids ever gets cleaned up, and it only
+    runs if that route is actually called. Without this, an abandoned
+    review (tab closed, never finished) leaves its clones stranded
+    forever, the same leak this whole cleanup effort was fixing.
+
+    Waits `delay` seconds (default 2h — comfortably longer than any real
+    review session) then deletes only if the task is still sitting in
+    'transcript_ready': if generate-audio was already called, that route
+    owns the cleanup instead, and re-deleting here would race with (or
+    duplicate) it."""
+    def _del():
+        time.sleep(delay)
+        task = _tasks.get(task_id)
+        if not task or task.get('status') != 'transcript_ready':
+            return
+        for voice_id in voice_ids.values():
+            try: elevenlabs_delete_voice(voice_id)
+            except Exception: pass
+    threading.Thread(target=_del, daemon=True).start()
+
+
 def elevenlabs_tts(run_segments, voice_id, out_path):
     """Generate ONE continuous speech clip on Eleven v3 for `run_segments`
     — a list of {text, emotion} dicts, in order, all from the same
@@ -2666,12 +2706,22 @@ def translate_dub_route():
             _tasks[uid]['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
             speakers = sorted({s['speaker'] for s in segments if s['speaker']})
             voice_ids = {}
-            for spk in (speakers or [None]):
-                clip_paths = extract_speaker_clips(clone_source, segments, spk, TEMP_DIR, f'{uid}_{spk or "solo"}')
-                if clip_paths:
-                    voice_ids[spk] = elevenlabs_clone_voice(clip_paths, f'{uid}-{spk or "speaker"}')
-                for p in clip_paths:
-                    cleanup_later(p, delay=5)
+            try:
+                for spk in (speakers or [None]):
+                    clip_paths = extract_speaker_clips(clone_source, segments, spk, TEMP_DIR, f'{uid}_{spk or "solo"}')
+                    if clip_paths:
+                        voice_ids[spk] = elevenlabs_clone_voice(clip_paths, f'{uid}-{spk or "speaker"}')
+                    for p in clip_paths:
+                        cleanup_later(p, delay=5)
+            except Exception:
+                # A later speaker's clone failing shouldn't strand the
+                # voices already cloned for earlier speakers in this same
+                # job — delete them now rather than leaking them, then
+                # let the outer handler report the job as failed.
+                for voice_id in voice_ids.values():
+                    try: elevenlabs_delete_voice(voice_id)
+                    except Exception: pass
+                raise
             if vocals_path:
                 cleanup_later(vocals_path, delay=5)
 
@@ -2696,6 +2746,7 @@ def translate_dub_route():
                 'target_language': target_language,
                 '_voice_ids': voice_ids,
             }
+            cleanup_abandoned_voices(uid, voice_ids)
             cleanup_later(wav_path)
             cleanup_later(input_path)
         except Exception as e:
@@ -2766,6 +2817,18 @@ def translate_dub_generate_audio(task_id):
             for p in clip_paths:
                 try: cleanup_later(p, delay=5)
                 except: pass
+        finally:
+            # Each job clones a fresh voice per speaker from its own
+            # source audio — nothing reuses a cloned voice across jobs,
+            # and this is the only call site that ever consumes
+            # voice_ids — so once generation is done (success or
+            # failure), these clones are safe to delete. Left uncleaned,
+            # they silently pile up against ElevenLabs' custom-voice cap
+            # and start failing brand new jobs at the cloning step with
+            # no obvious connection to what actually caused it.
+            for voice_id in voice_ids.values():
+                try: elevenlabs_delete_voice(voice_id)
+                except Exception: pass
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify(status='processing_audio')
