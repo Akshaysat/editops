@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil, hashlib
 import urllib.request, urllib.error, urllib.parse
 import zipfile, io
 
@@ -22,6 +22,22 @@ app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20 GB max upload
 
 TEMP_DIR = tempfile.gettempdir()
 NULL_DEV = 'NUL' if os.name == 'nt' else '/dev/null'
+
+# Cross-job cache of cloned ElevenLabs voices, keyed by a content hash of
+# the exact speaker audio they were cloned from — a hit here (e.g. a
+# video re-processed after an earlier failure) means TTS reuses the
+# existing voice_id instead of spending another voice add/edit operation
+# against ElevenLabs' scarce monthly quota. Persisted to a JSON file
+# (survives server restarts, unlike TEMP_DIR / _tasks) at a path next to
+# app.py, in insertion order, so it can be trimmed FIFO — see
+# cache_cloned_voice() — to stay under ElevenLabs' separate 30-voice
+# account cap. MAX_CACHED_VOICES is set below that hard cap, not at it,
+# to leave headroom for any voices in the account outside this cache
+# (manually created, or from other tools) that this app doesn't know
+# about.
+VOICE_CACHE_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.voice_cache.json')
+MAX_CACHED_VOICES  = int(os.environ.get('MAX_CACHED_VOICES', 25))
+_voice_cache_lock  = threading.Lock()
 
 # Every teammate runs their own local copy of this app, so feedback can't
 # just live in a local file — it needs to land somewhere shared. This key
@@ -2177,18 +2193,91 @@ def elevenlabs_clone_voice(sample_paths, name):
 
 
 def elevenlabs_delete_voice(voice_id):
-    """Delete a cloned voice. Each Translate & Dub job clones a fresh
-    voice per speaker from that job's own source audio — nothing in the
-    app reuses a cloned voice across jobs — so once a job's dub audio is
-    generated, its clones are pure dead weight against the account's
-    custom-voice cap. Best-effort: a failed delete here shouldn't fail
-    the job that already produced its result."""
+    """Delete a cloned voice from ElevenLabs. Called when a voice is
+    evicted from the cross-job voice cache (see cache_cloned_voice()) or
+    when a partially-completed clone attempt needs to be rolled back —
+    never unconditionally after a job, since a job's voices are shared,
+    cached state that other jobs may still reuse. Best-effort: a failed
+    delete here shouldn't fail the job that already produced its
+    result."""
     req = urllib.request.Request(
         f'https://api.elevenlabs.io/v1/voices/{voice_id}',
         method='DELETE',
         headers=_elevenlabs_headers(),
     )
     _elevenlabs_call(req, timeout=30)
+
+
+def _fingerprint_clips(clip_paths):
+    """Content hash identifying the exact speaker audio a voice would be
+    cloned from. Same source video re-processed (e.g. retried after an
+    earlier failure) produces byte-identical clips and therefore the same
+    fingerprint — a different video, even of the same real person,
+    produces different clip audio and won't match. That's a deliberate
+    scope limit, not a bug: recognizing "this is the same person" across
+    unrelated recordings needs real speaker-recognition, which this is
+    not attempting."""
+    h = hashlib.sha256()
+    for p in clip_paths:
+        with open(p, 'rb') as f:
+            h.update(f.read())
+    return h.hexdigest()
+
+
+def _load_voice_cache():
+    try:
+        with open(VOICE_CACHE_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_voice_cache(entries):
+    tmp_path = VOICE_CACHE_PATH + '.tmp'
+    with open(tmp_path, 'w') as f:
+        json.dump(entries, f)
+    os.replace(tmp_path, VOICE_CACHE_PATH)
+
+
+def get_cached_voice(fingerprint):
+    """Return the cached voice_id for this exact speaker-audio fingerprint,
+    or None on a cache miss."""
+    with _voice_cache_lock:
+        for entry in _load_voice_cache():
+            if entry['fingerprint'] == fingerprint:
+                return entry['voice_id']
+    return None
+
+
+def cache_cloned_voice(fingerprint, voice_id):
+    """Record a freshly cloned voice in the cross-job cache, in insertion
+    order, then trim the oldest entries (FIFO) past MAX_CACHED_VOICES —
+    keeping the account safely under ElevenLabs' 30-voice cap while still
+    letting frequently re-processed videos reuse their clone instead of
+    spending a new voice add/edit operation. Evicted voices are actually
+    deleted from ElevenLabs, not just forgotten, so the cache and the
+    account never drift apart."""
+    with _voice_cache_lock:
+        entries = _load_voice_cache()
+        entries.append({'fingerprint': fingerprint, 'voice_id': voice_id})
+        evicted = []
+        while len(entries) > MAX_CACHED_VOICES:
+            evicted.append(entries.pop(0))
+        _save_voice_cache(entries)
+    for entry in evicted:
+        try: elevenlabs_delete_voice(entry['voice_id'])
+        except Exception: pass
+
+
+def discard_cached_voice(voice_id):
+    """Remove one voice from the cache without waiting for FIFO eviction
+    — used when a clone that was just cached turns out to be unusable
+    (e.g. a later speaker's clone fails mid-job and this one needs to be
+    rolled back too). Does not delete it from ElevenLabs; the caller does
+    that itself so the two stay in sync."""
+    with _voice_cache_lock:
+        entries = [e for e in _load_voice_cache() if e['voice_id'] != voice_id]
+        _save_voice_cache(entries)
 
 
 def cleanup_abandoned_clone_source(task_id, path, delay=7200):
@@ -2777,21 +2866,42 @@ def translate_dub_generate_audio(task_id):
             # speaker's lines were all deleted during review, skip them
             # entirely rather than spending an operation on a voice
             # nothing will use.
+            #
+            # Before cloning, check the cross-job cache (get_cached_voice)
+            # keyed by a hash of the exact speaker audio: a video
+            # re-processed after an earlier failure produces the same
+            # clip bytes and reuses its existing voice instead of
+            # spending a new operation. Voices found via a cache hit are
+            # NOT this job's to delete — they're shared, so only voices
+            # actually cloned fresh in this attempt (tracked separately
+            # in `newly_cloned`) get rolled back if a later speaker fails.
             speakers = sorted({s['speaker'] for s in kept if s['speaker']})
+            newly_cloned = []
             try:
                 for spk in (speakers or [None]):
                     spk_clip_paths = extract_speaker_clips(
                         clone_source, original_segments, spk, TEMP_DIR, f'{task_id}_{spk or "solo"}')
                     if spk_clip_paths:
-                        voice_ids[spk] = elevenlabs_clone_voice(spk_clip_paths, f'{task_id}-{spk or "speaker"}')
+                        fingerprint = _fingerprint_clips(spk_clip_paths)
+                        cached_id = get_cached_voice(fingerprint)
+                        if cached_id:
+                            voice_ids[spk] = cached_id
+                        else:
+                            new_id = elevenlabs_clone_voice(spk_clip_paths, f'{task_id}-{spk or "speaker"}')
+                            voice_ids[spk] = new_id
+                            newly_cloned.append(new_id)
+                            cache_cloned_voice(fingerprint, new_id)
                     for p in spk_clip_paths:
                         cleanup_later(p, delay=5)
             except Exception:
                 # A later speaker's clone failing shouldn't strand the
-                # voices already cloned for earlier speakers in this same
-                # job — delete them now rather than leaking them, then
-                # let the outer handler report the job as failed.
-                for voice_id in voice_ids.values():
+                # voices freshly cloned for earlier speakers in this same
+                # job — delete (and un-cache) them now rather than
+                # leaking them, then let the outer handler report the
+                # job as failed. Cache hits are left untouched — they
+                # belong to the shared cache, not this job.
+                for voice_id in newly_cloned:
+                    discard_cached_voice(voice_id)
                     try: elevenlabs_delete_voice(voice_id)
                     except Exception: pass
                 raise
@@ -2839,17 +2949,12 @@ def translate_dub_generate_audio(task_id):
                 try: cleanup_later(p, delay=5)
                 except: pass
         finally:
-            # Each job clones a fresh voice per speaker from its own
-            # source audio — nothing reuses a cloned voice across jobs,
-            # and this is the only call site that ever consumes
-            # voice_ids — so once generation is done (success or
-            # failure), these clones are safe to delete. Left uncleaned,
-            # they silently pile up against ElevenLabs' custom-voice cap
-            # and start failing brand new jobs at the cloning step with
-            # no obvious connection to what actually caused it.
-            for voice_id in voice_ids.values():
-                try: elevenlabs_delete_voice(voice_id)
-                except Exception: pass
+            # Voices are NOT deleted here on success — they're shared,
+            # cached state (see cache_cloned_voice()) that a future job
+            # re-processing the same source audio may reuse. They're
+            # only ever deleted by FIFO eviction once the cache exceeds
+            # MAX_CACHED_VOICES, or by the rollback above if this job's
+            # own clone attempt failed partway through.
             try:
                 if clone_source and os.path.exists(clone_source):
                     os.remove(clone_source)

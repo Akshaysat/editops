@@ -8,3 +8,4 @@ uploads/
 *.srt
 test_videos/
 .env
+.voice_cache.json
