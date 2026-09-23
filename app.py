@@ -2191,28 +2191,31 @@ def elevenlabs_delete_voice(voice_id):
     _elevenlabs_call(req, timeout=30)
 
 
-def cleanup_abandoned_voices(task_id, voice_ids, delay=7200):
-    """Delete a Translate & Dub job's cloned voices if the job is
-    abandoned after transcription — the user never clicks "Lock
-    Transcript & Generate Audio" — since translate_dub_generate_audio()
-    is the only other place voice_ids ever gets cleaned up, and it only
-    runs if that route is actually called. Without this, an abandoned
-    review (tab closed, never finished) leaves its clones stranded
-    forever, the same leak this whole cleanup effort was fixing.
+def cleanup_abandoned_clone_source(task_id, path, delay=7200):
+    """Delete a Translate & Dub job's retained source audio (kept alive
+    across the transcript-review period so generate-audio can clone
+    speaker voices from it) if the job is abandoned — the user never
+    clicks "Lock Transcript & Generate Audio". Voice cloning itself is
+    deferred until that click (so an abandoned review never spends an
+    ElevenLabs voice add/edit operation at all), but the audio file this
+    function guards is still a local temp-disk leak if nobody ever comes
+    back for it.
 
     Waits `delay` seconds (default 2h — comfortably longer than any real
     review session) then deletes only if the task is still sitting in
     'transcript_ready': if generate-audio was already called, that route
-    owns the cleanup instead, and re-deleting here would race with (or
-    duplicate) it."""
+    consumes (and cleans up) the file itself, so re-deleting here would
+    race with it or delete a path it still needs."""
     def _del():
         time.sleep(delay)
         task = _tasks.get(task_id)
         if not task or task.get('status') != 'transcript_ready':
             return
-        for voice_id in voice_ids.values():
-            try: elevenlabs_delete_voice(voice_id)
-            except Exception: pass
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
     threading.Thread(target=_del, daemon=True).start()
 
 
@@ -2686,68 +2689,42 @@ def translate_dub_route():
             _tasks[uid]['progress'] = 'Transcribing, translating, and reading emotion… (Gemini)'
             segments = gemini_translate_with_emotion(wav_path, target_language, source_language)
 
-            # Separate vocals from background music up front, before
-            # cloning — the clean vocals stem is a better source to cut
-            # cloning samples from than the raw audio with music playing
-            # underneath the speaker. Best-effort: if this fails, clone
-            # straight from the raw audio like before (voice-add's own
-            # remove_background_noise=true is still applied as a fallback
-            # layer of cleaning either way) — never fail the whole job
+            # Separate vocals from background music up front — the clean
+            # vocals stem is a better source to cut cloning samples from
+            # later than the raw audio with music playing underneath the
+            # speaker. This isn't an ElevenLabs voice add/edit operation
+            # (it's their stem-separation endpoint), so doing it now,
+            # ahead of user review, doesn't cost anything against that
+            # scarce monthly quota — it just makes the eventual "Lock
+            # Transcript & Generate Audio" step faster. Best-effort: if
+            # it fails, clone_source falls back to the raw wav (voice-
+            # add's own remove_background_noise=true still cleans it as
+            # a fallback layer either way) — never fail the whole job
             # over this.
             _tasks[uid]['progress'] = 'Separating vocals from background music… (ElevenLabs)'
             vocals_path = os.path.join(TEMP_DIR, f'vt_td_{uid}_vocals.mp3')
             try:
                 elevenlabs_extract_vocals(wav_path, vocals_path)
                 clone_source = vocals_path
+                cleanup_later(wav_path, delay=5)
             except Exception:
                 vocals_path = None
                 clone_source = wav_path
 
-            _tasks[uid]['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
-            speakers = sorted({s['speaker'] for s in segments if s['speaker']})
-            voice_ids = {}
-            try:
-                for spk in (speakers or [None]):
-                    clip_paths = extract_speaker_clips(clone_source, segments, spk, TEMP_DIR, f'{uid}_{spk or "solo"}')
-                    if clip_paths:
-                        voice_ids[spk] = elevenlabs_clone_voice(clip_paths, f'{uid}-{spk or "speaker"}')
-                    for p in clip_paths:
-                        cleanup_later(p, delay=5)
-            except Exception:
-                # A later speaker's clone failing shouldn't strand the
-                # voices already cloned for earlier speakers in this same
-                # job — delete them now rather than leaking them, then
-                # let the outer handler report the job as failed.
-                for voice_id in voice_ids.values():
-                    try: elevenlabs_delete_voice(voice_id)
-                    except Exception: pass
-                raise
-            if vocals_path:
-                cleanup_later(vocals_path, delay=5)
-
-            if not voice_ids:
-                _tasks[uid] = {'status': 'error', 'error': 'Could not extract enough clean speaker audio to clone a voice.'}
-                cleanup_later(wav_path)
-                cleanup_later(input_path)
-                return
-
-            # A freshly cloned voice can take ~10-15s to propagate through
-            # ElevenLabs' backend before synthesis is reliable — per their
-            # own guidance. Without this wait, the very first TTS call for
-            # a new voice (typically the video's opening line) can come
-            # out flatter/less expressive than every line after it, which
-            # is exactly what real testing on this feature surfaced.
-            _tasks[uid]['progress'] = 'Finishing up voice setup…'
-            time.sleep(15)
-
+            # Voice cloning itself (an ElevenLabs voice add/edit
+            # operation — the scarce, quota-limited step) is deliberately
+            # NOT done here. Doing it before the user has reviewed and
+            # locked the transcript means every abandoned or re-edited
+            # review burns an operation for nothing. clone_source is kept
+            # alive on disk and handed to translate_dub_generate_audio(),
+            # which clones voices only once the user actually commits.
             _tasks[uid] = {
                 'status': 'transcript_ready',
                 'segments': segments,
                 'target_language': target_language,
-                '_voice_ids': voice_ids,
+                '_clone_source': clone_source,
             }
-            cleanup_abandoned_voices(uid, voice_ids)
-            cleanup_later(wav_path)
+            cleanup_abandoned_clone_source(uid, clone_source)
             cleanup_later(input_path)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
@@ -2778,16 +2755,60 @@ def translate_dub_generate_audio(task_id):
     if not edited_segments:
         return jsonify(error='No segments provided'), 400
 
-    voice_ids = task.get('_voice_ids', {})
+    clone_source = task.get('_clone_source')
+    if not clone_source or not os.path.exists(clone_source):
+        return jsonify(error='This session has expired — please re-upload the video and start again.'), 410
+
+    original_segments = task.get('segments', [])
     task['status']   = 'processing_audio'
-    task['progress'] = 'Generating speech… (ElevenLabs)'
+    task['progress'] = 'Cloning speaker voice(s)… (ElevenLabs)'
 
     def run():
+        voice_ids = {}
         clip_paths = []
         try:
             kept = [s for s in edited_segments if (s.get('text') or '').strip()]
-            runs = _group_segments_into_runs(kept)
 
+            # Voice cloning (an ElevenLabs voice add/edit operation) only
+            # happens here, once the user has actually reviewed and
+            # locked the transcript — not during transcription — so an
+            # abandoned or re-edited review never spends one for nothing.
+            # Only speakers with at least one kept line are cloned: if a
+            # speaker's lines were all deleted during review, skip them
+            # entirely rather than spending an operation on a voice
+            # nothing will use.
+            speakers = sorted({s['speaker'] for s in kept if s['speaker']})
+            try:
+                for spk in (speakers or [None]):
+                    spk_clip_paths = extract_speaker_clips(
+                        clone_source, original_segments, spk, TEMP_DIR, f'{task_id}_{spk or "solo"}')
+                    if spk_clip_paths:
+                        voice_ids[spk] = elevenlabs_clone_voice(spk_clip_paths, f'{task_id}-{spk or "speaker"}')
+                    for p in spk_clip_paths:
+                        cleanup_later(p, delay=5)
+            except Exception:
+                # A later speaker's clone failing shouldn't strand the
+                # voices already cloned for earlier speakers in this same
+                # job — delete them now rather than leaking them, then
+                # let the outer handler report the job as failed.
+                for voice_id in voice_ids.values():
+                    try: elevenlabs_delete_voice(voice_id)
+                    except Exception: pass
+                raise
+
+            if not voice_ids:
+                raise ValueError('Could not extract enough clean speaker audio to clone a voice.')
+
+            # A freshly cloned voice can take ~10-15s to propagate through
+            # ElevenLabs' backend before synthesis is reliable — per their
+            # own guidance. Without this wait, the very first TTS call for
+            # a new voice (typically the video's opening line) can come
+            # out flatter/less expressive than every line after it, which
+            # is exactly what real testing on this feature surfaced.
+            task['progress'] = 'Finishing up voice setup…'
+            time.sleep(15)
+
+            runs = _group_segments_into_runs(kept)
             for i, run_segs in enumerate(runs):
                 task['progress'] = f'Generating speech… ({i + 1}/{len(runs)})'
                 voice_id = (voice_ids.get(run_segs[0].get('speaker')) or voice_ids.get(None)
@@ -2829,6 +2850,11 @@ def translate_dub_generate_audio(task_id):
             for voice_id in voice_ids.values():
                 try: elevenlabs_delete_voice(voice_id)
                 except Exception: pass
+            try:
+                if clone_source and os.path.exists(clone_source):
+                    os.remove(clone_source)
+            except Exception:
+                pass
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify(status='processing_audio')
