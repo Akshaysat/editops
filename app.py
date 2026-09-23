@@ -2636,11 +2636,20 @@ def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
     run's overrun pushed past this run's ideal start, the drift is
     accepted locally for that one transition (no silence inserted, no
     audio overlap) rather than either compounding forward through the
-    rest of the video or clipping/overlapping speech."""
+    rest of the video or clipping/overlapping speech.
+
+    Returns a list of per-run diagnostic dicts ({target_start, natural_duration,
+    budget, stretch_factor, placed_at}) — timing correctness (unlike audio
+    quality) can be checked objectively without listening to anything: a
+    stretch_factor near 1.0 for most runs means the anchoring + prompt-side
+    duration budgeting are doing the job; a `placed_at` that keeps drifting
+    away from `target_start` points at exactly which run to spot-check by
+    ear, instead of the whole video."""
     filelist_path = out_path + '.filelist.txt'
     silence_paths = []
     stretched_paths = []
     cursor = 0.0
+    report = []
     with open(filelist_path, 'w') as f:
         for i, clip_path in enumerate(clip_paths):
             deadline = target_starts[i + 1] if i + 1 < len(target_starts) else total_duration
@@ -2648,6 +2657,8 @@ def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
 
             info = ffprobe_info(clip_path)
             actual = info['duration'] if info else 0.0
+            natural_duration = actual
+            stretch_factor = 1.0
 
             use_path = clip_path
             if budget > 0 and actual > budget:
@@ -2662,6 +2673,7 @@ def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
                     use_path = stretched_path
                     stretched_paths.append(stretched_path)
                     actual = actual / factor
+                    stretch_factor = factor
 
             start_at = target_starts[i]
             if start_at > cursor:
@@ -2677,6 +2689,13 @@ def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
                     silence_paths.append(silence_path)
                 cursor = start_at
             f.write(f"file '{use_path}'\n")
+            report.append({
+                'target_start': round(target_starts[i], 2),
+                'placed_at': round(cursor, 2),
+                'natural_duration': round(natural_duration, 2),
+                'budget': round(budget, 2),
+                'stretch_factor': round(stretch_factor, 3),
+            })
             cursor += actual
     subprocess.run(
         ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', filelist_path,
@@ -2687,6 +2706,7 @@ def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
     for p in silence_paths + stretched_paths:
         try: os.remove(p)
         except Exception: pass
+    return report
 
 
 def _group_segments_into_runs(kept, max_chars=4000):
@@ -2898,13 +2918,34 @@ def translate_dub_generate_audio(task_id):
             total_duration = clone_source_info['duration'] if clone_source_info else runs[-1][-1]['end']
 
             out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
-            _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path)
+            timing_report = _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path)
+
+            # Timing correctness can be checked objectively without
+            # listening to anything — print it so a real job's result can
+            # be evaluated from the console alone. A stretch_factor at or
+            # near max_stretch (1.15) points at exactly which run to
+            # spot-check by ear, instead of the whole video.
+            dub_info = ffprobe_info(out_path)
+            dub_duration = dub_info['duration'] if dub_info else None
+            print(f"\n🎬 Dub timing: source {total_duration:.2f}s → dub "
+                  f"{dub_duration:.2f}s (Δ {dub_duration - total_duration:+.2f}s)" if dub_duration else
+                  f"\n🎬 Dub timing: source {total_duration:.2f}s → dub duration unknown")
+            stretched_runs = [r for r in timing_report if r['stretch_factor'] > 1.0]
+            if stretched_runs:
+                print(f"   {len(stretched_runs)}/{len(timing_report)} run(s) needed stretching:")
+                for r in stretched_runs:
+                    print(f"   - run at {r['target_start']}s: {r['natural_duration']}s "
+                          f"into a {r['budget']}s budget → stretched {r['stretch_factor']}x")
+            else:
+                print(f"   All {len(timing_report)} run(s) fit their budget with no stretching.")
 
             _tasks[task_id] = {
                 'status':   'done',
                 'result':   out_path,
                 'filename': 'translated_audio.mp3',
                 'segments': kept,
+                'original_duration': round(total_duration, 2),
+                'dub_duration': round(dub_duration, 2) if dub_duration else None,
             }
             for p in clip_paths:
                 cleanup_later(p, delay=5)

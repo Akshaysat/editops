@@ -1993,6 +1993,17 @@ function timingStatsHtml(uploadMs, processMs) {
   return parts.length ? `<div class="tr-stats">${parts.join(' &nbsp;·&nbsp; ')}</div>` : '';
 }
 
+// Shows how closely the generated dub's duration matches the source
+// video's — the actual thing timing-anchoring is meant to guarantee, and
+// checkable at a glance instead of by listening to the whole video.
+function dubDurationStatsHtml(originalSec, dubSec) {
+  if (originalSec == null || dubSec == null) return '';
+  const delta = dubSec - originalSec;
+  const sign = delta >= 0 ? '+' : '';
+  return `<div class="tr-stats">Source: ${originalSec.toFixed(1)}s &nbsp;·&nbsp; ` +
+         `Dub: ${dubSec.toFixed(1)}s &nbsp;·&nbsp; Δ ${sign}${delta.toFixed(1)}s</div>`;
+}
+
 function showResult(tab, filename, url, isPreview = false, xhr = null, uploadMs = null, processMs = null) {
   document.getElementById('pw-' + tab).classList.remove('visible');
   const rb = document.getElementById('rb-' + tab);
@@ -2856,6 +2867,7 @@ function pollDubAudio(taskId, startTime) {
       document.getElementById('td-audio-result').innerHTML =
         `<div class="result-title">✓ Dubbed audio ready.</div>` +
         timingStatsHtml(null, Date.now() - startTime) +
+        dubDurationStatsHtml(data.original_duration, data.dub_duration) +
         `<div class="tr-player-wrap"><audio src="${url}" controls></audio></div>` +
         `<a class="download-btn" href="${url}" download="translated_audio.mp3">⬇ Download translated_audio.mp3</a>`;
     } else {
