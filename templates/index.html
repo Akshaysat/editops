@@ -2723,6 +2723,7 @@ function renderTranslateDubTranscript() {
         `<span>Translated transcript · ${_tdSegs.length} segments</span>` +
         `<span class="tr-panel-actions">` +
           `<span class="tr-hint">Click a line to edit the translation</span>` +
+          `<button class="tr-script-copy" onclick="copyTranslateDubTranscript(this)">Copy with Timestamps</button>` +
           `<button class="tr-reset" onclick="resetTranslateDubTranscript()">Reset to original</button>` +
         `</span>` +
       `</div>` +
@@ -2778,6 +2779,17 @@ function renderTranslateDubTranscript() {
 function resetTranslateDubTranscript() {
   _tdSegs = _tdSegsOrig.map(s => ({...s}));
   renderTranslateDubTranscript();
+}
+
+function copyTranslateDubTranscript(btn) {
+  const text = _tdSegs.map(s =>
+    `${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}  ${s.speaker ? s.speaker + ': ' : ''}${s.text.trim()}`
+  ).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
 }
 
 function generateDubAudio() {
