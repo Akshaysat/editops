@@ -453,6 +453,26 @@
       background: #F0F0F0; color: var(--muted); text-transform: capitalize;
     }
     .td-badge.td-emotion { background: #EEF3FF; color: #3355AA; }
+    select.td-badge {
+      border: none; appearance: none; cursor: pointer; font: inherit;
+      padding-right: 18px;
+    }
+    select.td-badge:hover { background: #E4E4E4; }
+    .td-speaker-legend {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      padding: 8px 14px; border-bottom: 1px solid var(--border); background: #FAFAFA;
+    }
+    .td-speaker-legend-label { font-size: 11.5px; color: var(--muted); }
+    .td-speaker-rename {
+      font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+      background: #F0F0F0; color: var(--text); border: 1px solid transparent;
+      text-transform: capitalize; min-width: 60px; font-family: inherit;
+    }
+    .td-speaker-rename:hover { background: #E9E9E9; }
+    .td-speaker-rename:focus {
+      outline: none; background: #fff; border-color: var(--border);
+      box-shadow: 0 0 0 1.5px var(--text);
+    }
     .td-source { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 4px; }
     .td-txt {
       color: var(--text); border-radius: 4px; outline: none; padding: 3px 5px;
@@ -2663,17 +2683,39 @@ function renderTranslateDubTranscript() {
     timingStatsHtml(_tdUploadMs, _tdProcessMs);
   rb.classList.add('visible');
 
-  const rows = _tdSegs.map((s, i) => (
-    `<div class="td-seg" data-idx="${i}">` +
-      `<div class="td-meta">` +
-        `<span class="td-ts">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
-        (s.speaker ? `<span class="td-badge">${escHtml(s.speaker)}</span>` : '') +
-        `<span class="td-badge td-emotion">${escHtml(s.emotion || 'neutral')}</span>` +
-      `</div>` +
-      `<div class="td-source">${escHtml(s.source_text)}</div>` +
-      `<div class="td-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</div>` +
+  // Speakers actually still present in the transcript, in first-seen
+  // order. Drives both the per-line reassignment dropdown below and the
+  // legend used to merge a misdiarized speaker (e.g. 4 detected when
+  // only 2 people actually speak) into an existing one by renaming it.
+  // Each distinct label here becomes one ElevenLabs voice clone when
+  // audio is generated, so collapsing extra speakers down to the real
+  // count directly cuts down on wasted clones.
+  const speakerList = [];
+  _tdSegs.forEach(s => { if (s.speaker && !speakerList.includes(s.speaker)) speakerList.push(s.speaker); });
+
+  const legendHtml = speakerList.length > 0 ? (
+    `<div class="td-speaker-legend">` +
+      `<span class="td-speaker-legend-label">Speakers — rename one to merge it into another:</span>` +
+      speakerList.map((sp, i) => `<input type="text" class="td-speaker-rename" data-speaker-idx="${i}">`).join('') +
     `</div>`
-  )).join('');
+  ) : '';
+
+  const rows = _tdSegs.map((s, i) => {
+    const speakerOptions = speakerList.map(sp =>
+      `<option${sp === s.speaker ? ' selected' : ''}>${escHtml(sp)}</option>`
+    ).join('') + `<option value="__new__">+ New speaker…</option>`;
+    return (
+      `<div class="td-seg" data-idx="${i}">` +
+        `<div class="td-meta">` +
+          `<span class="td-ts">${fmtTranscriptTime(s.start)} → ${fmtTranscriptTime(s.end)}</span>` +
+          (s.speaker ? `<select class="td-badge td-speaker-select" data-idx="${i}">${speakerOptions}</select>` : '') +
+          `<span class="td-badge td-emotion">${escHtml(s.emotion || 'neutral')}</span>` +
+        `</div>` +
+        `<div class="td-source">${escHtml(s.source_text)}</div>` +
+        `<div class="td-txt" contenteditable="true" spellcheck="true" data-idx="${i}">${escHtml(s.text)}</div>` +
+      `</div>`
+    );
+  }).join('');
 
   document.getElementById('td-extra').innerHTML =
     `<div class="tr-panel">` +
@@ -2684,6 +2726,7 @@ function renderTranslateDubTranscript() {
           `<button class="tr-reset" onclick="resetTranslateDubTranscript()">Reset to original</button>` +
         `</span>` +
       `</div>` +
+      legendHtml +
       `<div class="tr-preview" id="td-preview">${rows}</div>` +
     `</div>` +
     `<button class="submit-btn" style="margin-top:14px;" onclick="generateDubAudio()">Lock Transcript & Generate Audio</button>` +
@@ -2697,6 +2740,37 @@ function renderTranslateDubTranscript() {
   document.querySelectorAll('#td-preview .td-txt[contenteditable]').forEach(el => {
     el.addEventListener('input', () => {
       _tdSegs[parseInt(el.dataset.idx, 10)].text = el.innerText;
+    });
+  });
+
+  // Renaming a speaker in the legend merges it: every segment carrying
+  // the old label is repointed to the new one, so if the new label
+  // matches an existing speaker, the two collapse into one voice clone.
+  document.querySelectorAll('.td-speaker-rename').forEach(el => {
+    const idx = parseInt(el.dataset.speakerIdx, 10);
+    el.value = speakerList[idx];
+    el.addEventListener('change', () => {
+      const oldLabel = speakerList[idx];
+      const newLabel = el.value.trim();
+      if (!newLabel || newLabel === oldLabel) { el.value = oldLabel; return; }
+      _tdSegs.forEach(s => { if (s.speaker === oldLabel) s.speaker = newLabel; });
+      renderTranslateDubTranscript();
+    });
+  });
+
+  // Reassigns a single line to a different (existing or new) speaker —
+  // for the odd misattributed line rather than a wholesale merge.
+  document.querySelectorAll('.td-speaker-select').forEach(el => {
+    el.addEventListener('change', () => {
+      const idx = parseInt(el.dataset.idx, 10);
+      if (el.value === '__new__') {
+        const newLabel = (prompt('New speaker label for this line:') || '').trim();
+        if (!newLabel) { el.value = _tdSegs[idx].speaker; return; }
+        _tdSegs[idx].speaker = newLabel;
+      } else {
+        _tdSegs[idx].speaker = el.value;
+      }
+      renderTranslateDubTranscript();
     });
   });
 }
