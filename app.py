@@ -2422,6 +2422,14 @@ def gemini_translate_with_emotion(wav_path, target_language, source_language=Non
         'normally is fine and often sounds more natural — use judgment '
         'the way a fluent bilingual speaker code-switches, not a rigid '
         'rule applied to every single English word. '
+        'Keep each translation close in spoken length to its own segment\'s '
+        'duration (end minus start) at a natural conversational pace — not '
+        'padded with filler to stretch it out, and not so long that it '
+        'would clearly take noticeably longer to say aloud than the source '
+        'line did. When a fully natural translation would run much longer, '
+        'prefer the more concise phrasing that still preserves the meaning. '
+        'This is a soft guideline, not a strict character limit — natural, '
+        'correct meaning always wins over hitting an exact length. '
         '3) Identify which distinct speaker is talking by voice, labeled '
         'consistently as "Speaker 1", "Speaker 2" etc. in order of first '
         'appearance (omit this field if you can only detect one speaker). '
@@ -2605,33 +2613,78 @@ def transcribe_result(task_id):
                      mimetype='text/plain')
 
 
-def _stitch_audio_segments(clip_paths, gap_durations, out_path):
-    """Concatenate clip_paths in order, inserting a silence gap (seconds,
-    capped at 3s) from gap_durations[i] after clip i. Approximates the
-    source video's pacing — not exact duration-matching, which belongs to
-    the later lip-sync step, not this one."""
+def _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path,
+                            max_stretch=1.15, min_gap=0.15):
+    """Concatenate clip_paths in order, placing each one at its own
+    target_starts[i] (the run's original source start time) rather than
+    just sequentially after the previous clip — anchoring to source
+    timing like this, instead of accumulating whatever each clip's
+    natural TTS length happened to be, is what keeps the whole dub close
+    to the source video's duration instead of drifting further off with
+    every run (the original failure mode: a 42s source becoming 56s).
+
+    Before placing a clip, it's measured against its budget — the time
+    until the next run's own source start (or, for the last run, until
+    total_duration) minus min_gap of breathing room — and sped up
+    (pitch-preserving, via atempo) to fit if it overran, capped at
+    max_stretch so a large overrun doesn't audibly degrade the voice.
+    This also reclaims any slack from the source's own inter-turn
+    pauses: a run gets its *entire* budget to work with, not just its
+    own original segment's end-start.
+
+    If a clip still doesn't fit after the capped stretch, or a previous
+    run's overrun pushed past this run's ideal start, the drift is
+    accepted locally for that one transition (no silence inserted, no
+    audio overlap) rather than either compounding forward through the
+    rest of the video or clipping/overlapping speech."""
     filelist_path = out_path + '.filelist.txt'
     silence_paths = []
+    stretched_paths = []
+    cursor = 0.0
     with open(filelist_path, 'w') as f:
         for i, clip_path in enumerate(clip_paths):
-            f.write(f"file '{clip_path}'\n")
-            gap = min(gap_durations[i], 3.0) if i < len(gap_durations) else 0
-            if gap > 0.05:
-                silence_path = f'{out_path}.silence_{i}.mp3'
+            deadline = target_starts[i + 1] if i + 1 < len(target_starts) else total_duration
+            budget = max(0.0, deadline - target_starts[i] - min_gap)
+
+            info = ffprobe_info(clip_path)
+            actual = info['duration'] if info else 0.0
+
+            use_path = clip_path
+            if budget > 0 and actual > budget:
+                factor = min(actual / budget, max_stretch)
+                stretched_path = f'{out_path}.stretch_{i}.mp3'
                 subprocess.run(
-                    ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
-                     '-t', str(gap), '-q:a', '9', silence_path],
+                    ['ffmpeg', '-y', '-i', clip_path, '-filter:a', atempo_chain(factor),
+                     '-c:a', 'libmp3lame', stretched_path],
                     capture_output=True
                 )
-                f.write(f"file '{silence_path}'\n")
-                silence_paths.append(silence_path)
+                if os.path.exists(stretched_path):
+                    use_path = stretched_path
+                    stretched_paths.append(stretched_path)
+                    actual = actual / factor
+
+            start_at = target_starts[i]
+            if start_at > cursor:
+                gap = start_at - cursor
+                if gap > 0.05:
+                    silence_path = f'{out_path}.silence_{i}.mp3'
+                    subprocess.run(
+                        ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+                         '-t', str(gap), '-q:a', '9', silence_path],
+                        capture_output=True
+                    )
+                    f.write(f"file '{silence_path}'\n")
+                    silence_paths.append(silence_path)
+                cursor = start_at
+            f.write(f"file '{use_path}'\n")
+            cursor += actual
     subprocess.run(
         ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', filelist_path,
          '-c:a', 'libmp3lame', out_path],
         capture_output=True
     )
     os.remove(filelist_path)
-    for p in silence_paths:
+    for p in silence_paths + stretched_paths:
         try: os.remove(p)
         except Exception: pass
 
@@ -2835,13 +2888,17 @@ def translate_dub_generate_audio(task_id):
                 elevenlabs_tts(run_segs, voice_id, clip_path)
                 clip_paths.append(clip_path)
 
-            gaps = [
-                max(0.0, runs[i + 1][0]['start'] - runs[i][-1]['end']) if i + 1 < len(runs) else 0.0
-                for i in range(len(runs))
-            ]
+            # Anchor each run to its own original source start time (see
+            # _stitch_audio_segments) rather than the old approach of just
+            # inserting the source's inter-run silence gap sequentially —
+            # that let any single run's TTS overrun push every run after
+            # it later too, compounding into large total-duration drift.
+            target_starts = [run_segs[0]['start'] for run_segs in runs]
+            clone_source_info = ffprobe_info(clone_source)
+            total_duration = clone_source_info['duration'] if clone_source_info else runs[-1][-1]['end']
 
             out_path = os.path.join(TEMP_DIR, f'vt_td_{task_id}.mp3')
-            _stitch_audio_segments(clip_paths, gaps, out_path)
+            _stitch_audio_segments(clip_paths, target_starts, total_duration, out_path)
 
             _tasks[task_id] = {
                 'status':   'done',
