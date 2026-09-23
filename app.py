@@ -2208,6 +2208,27 @@ def elevenlabs_delete_voice(voice_id):
     _elevenlabs_call(req, timeout=30)
 
 
+def elevenlabs_voice_exists(voice_id):
+    """Check whether a voice_id still exists in the ElevenLabs account.
+    The voice cache only knows about deletions it performs itself (FIFO
+    eviction, failed-clone rollback) — it can drift from the account's
+    real state if a voice is removed some other way (e.g. manually via
+    the ElevenLabs dashboard). Reusing a cache hit without checking this
+    first fails TTS generation outright with a 404 instead of quietly
+    falling back to a fresh clone."""
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/voices/{voice_id}',
+        headers=_elevenlabs_headers(),
+    )
+    try:
+        _elevenlabs_call(req, timeout=15)
+        return True
+    except ValueError as e:
+        if '(404)' in str(e):
+            return False
+        raise
+
+
 def _fingerprint_clips(clip_paths):
     """Content hash identifying the exact speaker audio a voice would be
     cloned from. Same source video re-processed (e.g. retried after an
@@ -2884,6 +2905,15 @@ def translate_dub_generate_audio(task_id):
                     if spk_clip_paths:
                         fingerprint = _fingerprint_clips(spk_clip_paths)
                         cached_id = get_cached_voice(fingerprint)
+                        if cached_id and not elevenlabs_voice_exists(cached_id):
+                            # Cache says this voice exists but ElevenLabs
+                            # disagrees — it was deleted some way this
+                            # app didn't track (e.g. manually via the
+                            # dashboard). Drop the stale entry and fall
+                            # through to clone a fresh replacement rather
+                            # than failing the whole job on a 404 later.
+                            discard_cached_voice(cached_id)
+                            cached_id = None
                         if cached_id:
                             voice_ids[spk] = cached_id
                         else:
