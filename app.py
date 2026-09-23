@@ -2939,14 +2939,26 @@ def translate_dub_generate_audio(task_id):
             if not voice_ids:
                 raise ValueError('Could not extract enough clean speaker audio to clone a voice.')
 
-            # A freshly cloned voice can take ~10-15s to propagate through
-            # ElevenLabs' backend before synthesis is reliable — per their
-            # own guidance. Without this wait, the very first TTS call for
-            # a new voice (typically the video's opening line) can come
-            # out flatter/less expressive than every line after it, which
-            # is exactly what real testing on this feature surfaced.
-            task['progress'] = 'Finishing up voice setup…'
-            time.sleep(15)
+            # A freshly cloned voice needs time to propagate through
+            # ElevenLabs' backend before synthesis is reliable — ElevenLabs'
+            # own guidance says ~10-15s, and that's what this used to wait.
+            # But that guidance turned out to be optimistic in practice, and
+            # it used to not matter: cloning happened during transcription,
+            # so the wait was really "15s plus however long the user spent
+            # reviewing the transcript" — several minutes of accidental
+            # buffer. Now that cloning is deferred to this exact moment (see
+            # the comment above this function), TTS starts almost
+            # immediately after cloning with no such buffer, which exposed
+            # the gap: for a short video, most or all of its lines can get
+            # generated before the voice has actually finished propagating,
+            # degrading the whole result rather than just the opening line.
+            # 30s is a deliberately more generous buffer to compensate.
+            # Skipped entirely when every speaker was a cache hit — a
+            # reused voice already finished propagating the first time it
+            # was cloned, so there's nothing new to wait on.
+            if newly_cloned:
+                task['progress'] = 'Finishing up voice setup…'
+                time.sleep(30)
 
             runs = _group_segments_into_runs(kept)
             for i, run_segs in enumerate(runs):
