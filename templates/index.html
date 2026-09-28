@@ -2139,7 +2139,22 @@ function submit(tab, isPreview = false) {
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', endpoint);
-  xhr.responseType = 'blob';
+
+  // These five run a slow ffmpeg job (a large Compress/Trim/Merge/Convert/
+  // Speed Up can take many minutes) — the upload alone returns a task_id
+  // right away, and the actual processing happens in a background thread
+  // polled via /status + /result, the same resilient pattern Transcribe and
+  // Translate & Dub already use. This matters most on a shared/remote
+  // server: a single request held open for the *entire* multi-minute
+  // encode, with no bytes flowing either direction while ffmpeg runs, is
+  // exactly the kind of long-idle connection a router, VPN, or antivirus
+  // is prone to silently drop — which read to the user as a bare "Network
+  // error" with no way to tell what actually went wrong. Splitting it into
+  // a fast upload + small periodic polls means a single dropped poll can
+  // just retry, instead of losing the whole job.
+  const ASYNC_TABS = ['speed', 'compress', 'trim', 'merge', 'convert'];
+  const isAsyncTab = ASYNC_TABS.includes(tab);
+  xhr.responseType = isAsyncTab ? 'text' : 'blob';
 
   // Show progress immediately so there's no blank gap before onprogress fires
   showProgress(tab, 0, 'Uploading…');
@@ -2175,27 +2190,68 @@ function submit(tab, isPreview = false) {
   };
 
   xhr.onload = () => {
-    if (xhr.status === 200) {
-      // Extract filename from Content-Disposition header
-      const cd = xhr.getResponseHeader('Content-Disposition') || '';
-      const m  = cd.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/);
-      const filename = m ? decodeURIComponent(m[1]) : 'output.mp4';
-      const url = URL.createObjectURL(xhr.response);
-      const uploadMs  = uploadEndTime ? uploadEndTime - uploadStart : null;
-      const processMs = uploadEndTime ? Date.now() - uploadEndTime : null;
-      showResult(tab, filename, url, isPreview, xhr, uploadMs, processMs);
-    } else {
-      xhr.response.text().then(text => {
-        let msg = 'Processing failed. Please try again.';
-        try { msg = JSON.parse(text).error; } catch {}
-        showError(tab, msg);
-      });
+    if (xhr.status !== 200) {
+      let msg = 'Processing failed. Please try again.';
+      try { msg = JSON.parse(xhr.responseText).error; } catch {}
+      showError(tab, msg);
+      return;
     }
+
+    if (isAsyncTab) {
+      const { task_id } = JSON.parse(xhr.responseText);
+      pollAsyncJob(tab, endpoint, task_id, isPreview, uploadStart, uploadEndTime);
+      return;
+    }
+
+    // Extract filename from Content-Disposition header
+    const cd = xhr.getResponseHeader('Content-Disposition') || '';
+    const m  = cd.match(/filename[^;=\n]*=["']?([^"';\n]*)["']?/);
+    const filename = m ? decodeURIComponent(m[1]) : 'output.mp4';
+    const url = URL.createObjectURL(xhr.response);
+    const uploadMs  = uploadEndTime ? uploadEndTime - uploadStart : null;
+    const processMs = uploadEndTime ? Date.now() - uploadEndTime : null;
+    showResult(tab, filename, url, isPreview, xhr, uploadMs, processMs);
   };
 
   xhr.onerror = () => showError(tab, 'Network error — is the server running?');
 
   xhr.send(form);
+}
+
+// Polls /<endpoint>/status/<task_id> for Speed/Compress/Trim/Merge/Convert
+// jobs until they finish, then hands off to the same showResult() every
+// other feature uses — the result itself is fetched from /<endpoint>/result
+// (a plain GET, servable directly as a <video>/<audio> src or download
+// href) rather than buffered as a blob through the original request.
+function pollAsyncJob(tab, endpoint, taskId, isPreview, uploadStart, uploadEndTime) {
+  const interval = setInterval(async () => {
+    let data;
+    try {
+      data = await (await fetch(`${endpoint}/status/${taskId}`)).json();
+    } catch {
+      clearInterval(interval);
+      showError(tab, 'Lost connection to server.');
+      return;
+    }
+
+    if (data.status === 'error') {
+      clearInterval(interval);
+      showError(tab, data.error || 'Processing failed.');
+      return;
+    }
+
+    if (data.progress) {
+      document.getElementById('pl-' + tab).textContent = data.progress;
+    }
+
+    if (data.status === 'done') {
+      clearInterval(interval);
+      const url = `${endpoint}/result/${taskId}`;
+      const uploadMs  = uploadEndTime ? uploadEndTime - uploadStart : null;
+      const processMs = uploadEndTime ? Date.now() - uploadEndTime : null;
+      showResult(tab, data.filename || 'output', url, isPreview, null, uploadMs, processMs);
+    }
+  }, 1500);
 }
 
 // ── YouTube Download ───────────────────────────────────────────────────────

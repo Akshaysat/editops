@@ -327,73 +327,109 @@ def speed_route():
     if not file:
         return jsonify(error='No file uploaded'), 400
 
-    input_path, uid = save_upload(file)
-
-    info = ffprobe_info(input_path)
-    if not info:
-        os.remove(input_path)
-        return jsonify(error='Cannot read file. Is it a valid video or audio?'), 400
-
     mode    = request.form.get('mode', 'multiplier')
     raw     = request.form.get('value', '')
     preview = request.form.get('preview') == '1'
+    original_name = file.filename
 
-    try:
-        if mode == 'duration':
-            target = parse_time(raw)
-            if target <= 0:
-                raise ValueError
-            speed = info['duration'] / target
-        else:
-            speed = float(raw)
-            if speed <= 0:
-                raise ValueError
-    except (ValueError, ZeroDivisionError):
-        os.remove(input_path)
-        return jsonify(error='Invalid speed / duration value.'), 400
+    input_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Processing…'}
 
-    # -t 60 before -i limits input to 60 s for preview mode
-    t_limit = ['-t', '60'] if preview else []
+    def run():
+        try:
+            info = ffprobe_info(input_path)
+            if not info:
+                _tasks[uid] = {'status': 'error', 'error': 'Cannot read file. Is it a valid video or audio?'}
+                cleanup_later(input_path)
+                return
 
-    if not info['has_video']:
-        # Audio-only: apply atempo chain, output mp3
-        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
-        af = atempo_chain(speed)
-        cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
-               '-filter:a', af, '-c:a', 'libmp3lame', '-b:a', '192k',
-               output_path]
-        r = subprocess.run(cmd, capture_output=True)
-        cleanup_later(input_path)
-        if r.returncode != 0:
-            return jsonify(error='ffmpeg failed. Make sure ffmpeg is installed.'), 500
-        cleanup_later(output_path)
-        return send_file(output_path, as_attachment=True,
-                         download_name=f'{stem(file.filename)}_sped_up.mp3')
+            try:
+                if mode == 'duration':
+                    target = parse_time(raw)
+                    if target <= 0:
+                        raise ValueError
+                    speed = info['duration'] / target
+                else:
+                    speed = float(raw)
+                    if speed <= 0:
+                        raise ValueError
+            except (ValueError, ZeroDivisionError):
+                _tasks[uid] = {'status': 'error', 'error': 'Invalid speed / duration value.'}
+                cleanup_later(input_path)
+                return
 
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-    vf = f'setpts=PTS/{speed:.8f}'
-    if info['has_audio']:
-        af = atempo_chain(speed)
-        fc   = f'[0:v]{vf}[v];[0:a]{af}[a]'
-        maps = ['-map', '[v]', '-map', '[a]']
-    else:
-        fc   = f'[0:v]{vf}[v]'
-        maps = ['-map', '[v]']
+            # -t 60 before -i limits input to 60 s for preview mode
+            t_limit = ['-t', '60'] if preview else []
 
-    # Match original bitrate so quality is preserved
-    bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
+            if not info['has_video']:
+                # Audio-only: apply atempo chain, output mp3
+                output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+                af = atempo_chain(speed)
+                cmd = ['ffmpeg', '-y', *t_limit, '-i', input_path,
+                       '-filter:a', af, '-c:a', 'libmp3lame', '-b:a', '192k',
+                       output_path]
+                r = subprocess.run(cmd, capture_output=True)
+                cleanup_later(input_path)
+                if r.returncode != 0:
+                    _tasks[uid] = {'status': 'error', 'error': 'ffmpeg failed. Make sure ffmpeg is installed.'}
+                    return
+                _tasks[uid] = {
+                    'status': 'done', 'result': output_path,
+                    'filename': f'{stem(original_name)}_sped_up.mp3',
+                }
+                cleanup_later(output_path)
+                return
 
-    cmd_prefix = ['ffmpeg', '-y', *t_limit, '-i', input_path, '-filter_complex', fc, *maps]
-    cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
-    r = run_hw_encode(cmd_prefix, cmd_suffix, bv)
-    cleanup_later(input_path)
+            output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+            vf = f'setpts=PTS/{speed:.8f}'
+            if info['has_audio']:
+                af = atempo_chain(speed)
+                fc   = f'[0:v]{vf}[v];[0:a]{af}[a]'
+                maps = ['-map', '[v]', '-map', '[a]']
+            else:
+                fc   = f'[0:v]{vf}[v]'
+                maps = ['-map', '[v]']
 
-    if r.returncode != 0:
-        return jsonify(error='ffmpeg failed. Make sure ffmpeg is installed.'), 500
+            # Match original bitrate so quality is preserved
+            bv = f"{max(500, int(info['bit_rate'] * 0.98 / 1000))}k" if info['bit_rate'] else '14M'
 
-    cleanup_later(output_path)
-    return send_file(output_path, as_attachment=True,
-                     download_name=f'{stem(file.filename)}_sped_up.mp4')
+            cmd_prefix = ['ffmpeg', '-y', *t_limit, '-i', input_path, '-filter_complex', fc, *maps]
+            cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
+            r = run_hw_encode(cmd_prefix, cmd_suffix, bv)
+            cleanup_later(input_path)
+
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'ffmpeg failed. Make sure ffmpeg is installed.'}
+                return
+
+            _tasks[uid] = {
+                'status': 'done', 'result': output_path,
+                'filename': f'{stem(original_name)}_sped_up.mp4',
+            }
+            cleanup_later(output_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/speed/status/<task_id>')
+def speed_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/speed/result/<task_id>')
+def speed_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'sped_up.mp4'))
 
 
 @app.route('/compress', methods=['POST'])
@@ -402,65 +438,105 @@ def compress_route():
     if not file:
         return jsonify(error='No file uploaded'), 400
 
+    target_mb = float(request.form.get('target_mb', 900))
+    original_name = file.filename
+
     input_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Reading file…'}
 
-    info = ffprobe_info(input_path)
-    if not info or info['duration'] == 0:
-        os.remove(input_path)
-        return jsonify(error='Cannot read file.'), 400
+    def run():
+        try:
+            info = ffprobe_info(input_path)
+            if not info or info['duration'] == 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Cannot read file.'}
+                cleanup_later(input_path)
+                return
 
-    target_mb  = float(request.form.get('target_mb', 900))
-    total_bits = target_mb * 1_000_000 * 8
+            total_bits = target_mb * 1_000_000 * 8
 
-    if not info['has_video']:
-        # Audio-only: set bitrate directly to hit target size
-        abr = max(32_000, int(total_bits / info['duration']))
-        abr_k = f"{abr // 1000}k"
-        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
-        cmd = ['ffmpeg', '-y', '-i', input_path,
-               '-c:a', 'libmp3lame', '-b:a', abr_k, output_path]
-        r = subprocess.run(cmd, capture_output=True)
-        cleanup_later(input_path)
-        if r.returncode != 0:
-            return jsonify(error='Compression failed.'), 500
-        cleanup_later(output_path)
-        return send_file(output_path, as_attachment=True,
-                         download_name=f'{stem(file.filename)}_compressed.mp3')
+            if not info['has_video']:
+                # Audio-only: set bitrate directly to hit target size
+                _tasks[uid]['progress'] = 'Compressing audio…'
+                abr = max(32_000, int(total_bits / info['duration']))
+                abr_k = f"{abr // 1000}k"
+                output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+                cmd = ['ffmpeg', '-y', '-i', input_path,
+                       '-c:a', 'libmp3lame', '-b:a', abr_k, output_path]
+                r = subprocess.run(cmd, capture_output=True)
+                cleanup_later(input_path)
+                if r.returncode != 0:
+                    _tasks[uid] = {'status': 'error', 'error': 'Compression failed.'}
+                    return
+                _tasks[uid] = {
+                    'status': 'done', 'result': output_path,
+                    'filename': f'{stem(original_name)}_compressed.mp3',
+                }
+                cleanup_later(output_path)
+                return
 
-    passlog    = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-    audio_bits = 192_000 * info['duration']
-    vbr        = int((total_bits - audio_bits) / info['duration'])
+            passlog    = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
+            output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+            audio_bits = 192_000 * info['duration']
+            vbr        = int((total_bits - audio_bits) / info['duration'])
 
-    if vbr <= 0:
-        os.remove(input_path)
-        return jsonify(error='Target size is too small for this video duration.'), 400
+            if vbr <= 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Target size is too small for this video duration.'}
+                cleanup_later(input_path)
+                return
 
-    # Two-pass for accurate file size
-    cmd1 = ['ffmpeg', '-y', '-i', input_path,
-             '-c:v', 'libx264', '-b:v', str(vbr),
-             '-pass', '1', '-passlogfile', passlog,
-             '-an', '-f', 'null', NULL_DEV]
-    subprocess.run(cmd1, capture_output=True)
+            # Two-pass for accurate file size
+            _tasks[uid]['progress'] = 'Encoding… (pass 1/2)'
+            cmd1 = ['ffmpeg', '-y', '-i', input_path,
+                     '-c:v', 'libx264', '-b:v', str(vbr),
+                     '-pass', '1', '-passlogfile', passlog,
+                     '-an', '-f', 'null', NULL_DEV]
+            subprocess.run(cmd1, capture_output=True)
 
-    cmd2 = ['ffmpeg', '-y', '-i', input_path,
-             '-c:v', 'libx264', '-b:v', str(vbr),
-             '-pass', '2', '-passlogfile', passlog,
-             '-c:a', 'aac', '-b:a', '192k',
-             '-movflags', '+faststart', output_path]
-    r = subprocess.run(cmd2, capture_output=True)
+            _tasks[uid]['progress'] = 'Encoding… (pass 2/2)'
+            cmd2 = ['ffmpeg', '-y', '-i', input_path,
+                     '-c:v', 'libx264', '-b:v', str(vbr),
+                     '-pass', '2', '-passlogfile', passlog,
+                     '-c:a', 'aac', '-b:a', '192k',
+                     '-movflags', '+faststart', output_path]
+            r = subprocess.run(cmd2, capture_output=True)
 
-    for suf in ['-0.log', '-0.log.mbtree']:
-        try: os.remove(passlog + suf)
-        except: pass
-    cleanup_later(input_path)
+            for suf in ['-0.log', '-0.log.mbtree']:
+                try: os.remove(passlog + suf)
+                except: pass
+            cleanup_later(input_path)
 
-    if r.returncode != 0:
-        return jsonify(error='Compression failed.'), 500
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Compression failed.'}
+                return
 
-    cleanup_later(output_path)
-    return send_file(output_path, as_attachment=True,
-                     download_name=f'{stem(file.filename)}_compressed.mp4')
+            _tasks[uid] = {
+                'status': 'done', 'result': output_path,
+                'filename': f'{stem(original_name)}_compressed.mp4',
+            }
+            cleanup_later(output_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/compress/status/<task_id>')
+def compress_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/compress/result/<task_id>')
+def compress_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'compressed.mp4'))
 
 
 @app.route('/trim', methods=['POST'])
@@ -469,87 +545,121 @@ def trim_route():
     if not file:
         return jsonify(error='No file uploaded'), 400
 
-    input_path, uid = save_upload(file)
-
     try:
         segments = json.loads(request.form.get('segments', '[]'))
     except (ValueError, TypeError):
-        os.remove(input_path)
         return jsonify(error='Invalid segments data.'), 400
 
     if not segments:
-        os.remove(input_path)
         return jsonify(error='Please keep at least one segment.'), 400
 
-    info = ffprobe_info(input_path)
-    duration = info['duration'] if info else None
+    original_name = file.filename
+    input_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Trimming…'}
 
-    cleaned = []
-    for seg in segments:
+    def run():
         try:
-            s, e = float(seg['start']), float(seg['end'])
-        except (KeyError, TypeError, ValueError):
-            os.remove(input_path)
-            return jsonify(error='Invalid segment data.'), 400
-        if s < 0 or e <= s or (duration and e > duration + 0.5):
-            os.remove(input_path)
-            return jsonify(error='Segment times are out of range.'), 400
-        cleaned.append((s, e))
+            info = ffprobe_info(input_path)
+            duration = info['duration'] if info else None
 
-    if info and not info['has_video']:
-        out_ext = os.path.splitext(file.filename)[1] or '.mp3'
-    else:
-        out_ext = '.mp4'
+            cleaned = []
+            for seg in segments:
+                try:
+                    s, e = float(seg['start']), float(seg['end'])
+                except (KeyError, TypeError, ValueError):
+                    _tasks[uid] = {'status': 'error', 'error': 'Invalid segment data.'}
+                    cleanup_later(input_path)
+                    return
+                if s < 0 or e <= s or (duration and e > duration + 0.5):
+                    _tasks[uid] = {'status': 'error', 'error': 'Segment times are out of range.'}
+                    cleanup_later(input_path)
+                    return
+                cleaned.append((s, e))
 
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{out_ext}')
+            if info and not info['has_video']:
+                out_ext = os.path.splitext(original_name)[1] or '.mp3'
+            else:
+                out_ext = '.mp4'
 
-    # Explicit mapping — see /convert for why: implicit stream selection can
-    # silently drop audio on some source files (e.g. no track flagged as
-    # the "default" one).
-    def extract(start, end, out_path):
-        cmd = ['ffmpeg', '-y', '-ss', str(start), '-i', input_path, '-to', str(end - start),
-               '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', out_path]
-        return subprocess.run(cmd, capture_output=True)
+            output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{out_ext}')
 
-    if len(cleaned) == 1:
-        r = extract(cleaned[0][0], cleaned[0][1], output_path)
-        if r.returncode != 0:
-            cleanup_later(input_path)
-            return jsonify(error='Trim failed.'), 500
-    else:
-        segment_paths = []
-        for i, (s, e) in enumerate(cleaned):
-            seg_path = os.path.join(TEMP_DIR, f'vt_trimseg_{uid}_{i}{out_ext}')
-            r = extract(s, e, seg_path)
-            if r.returncode != 0:
-                cleanup_later(input_path)
+            # Explicit mapping — see /convert for why: implicit stream selection can
+            # silently drop audio on some source files (e.g. no track flagged as
+            # the "default" one).
+            def extract(start, end, out_path):
+                cmd = ['ffmpeg', '-y', '-ss', str(start), '-i', input_path, '-to', str(end - start),
+                       '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy', out_path]
+                return subprocess.run(cmd, capture_output=True)
+
+            if len(cleaned) == 1:
+                r = extract(cleaned[0][0], cleaned[0][1], output_path)
+                if r.returncode != 0:
+                    _tasks[uid] = {'status': 'error', 'error': 'Trim failed.'}
+                    cleanup_later(input_path)
+                    return
+            else:
+                segment_paths = []
+                for i, (s, e) in enumerate(cleaned):
+                    _tasks[uid]['progress'] = f'Trimming segment {i + 1}/{len(cleaned)}…'
+                    seg_path = os.path.join(TEMP_DIR, f'vt_trimseg_{uid}_{i}{out_ext}')
+                    r = extract(s, e, seg_path)
+                    if r.returncode != 0:
+                        _tasks[uid] = {'status': 'error', 'error': 'Trim failed.'}
+                        cleanup_later(input_path)
+                        for p in segment_paths:
+                            cleanup_later(p)
+                        return
+                    segment_paths.append(seg_path)
+
+                _tasks[uid]['progress'] = 'Joining segments…'
+                concat_path = os.path.join(TEMP_DIR, f'vt_trimconcat_{uid}.txt')
+                with open(concat_path, 'w') as fh:
+                    for p in segment_paths:
+                        fh.write(f"file '{p}'\n")
+
+                # Stream-copy concat is safe here (unlike /merge) because every
+                # segment was cut from the same source file, so codec params match.
+                r = subprocess.run(
+                    ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+                     '-c', 'copy', output_path],
+                    capture_output=True)
                 for p in segment_paths:
                     cleanup_later(p)
-                return jsonify(error='Trim failed.'), 500
-            segment_paths.append(seg_path)
+                cleanup_later(concat_path)
+                if r.returncode != 0:
+                    _tasks[uid] = {'status': 'error', 'error': 'Trim failed.'}
+                    cleanup_later(input_path)
+                    return
 
-        concat_path = os.path.join(TEMP_DIR, f'vt_trimconcat_{uid}.txt')
-        with open(concat_path, 'w') as fh:
-            for p in segment_paths:
-                fh.write(f"file '{p}'\n")
-
-        # Stream-copy concat is safe here (unlike /merge) because every
-        # segment was cut from the same source file, so codec params match.
-        r = subprocess.run(
-            ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-             '-c', 'copy', output_path],
-            capture_output=True)
-        for p in segment_paths:
-            cleanup_later(p)
-        cleanup_later(concat_path)
-        if r.returncode != 0:
             cleanup_later(input_path)
-            return jsonify(error='Trim failed.'), 500
+            _tasks[uid] = {
+                'status': 'done', 'result': output_path,
+                'filename': f'{stem(original_name)}_trimmed{out_ext}',
+            }
+            cleanup_later(output_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
 
-    cleanup_later(input_path)
-    cleanup_later(output_path)
-    return send_file(output_path, as_attachment=True,
-                     download_name=f'{stem(file.filename)}_trimmed{out_ext}')
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/trim/status/<task_id>')
+def trim_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/trim/result/<task_id>')
+def trim_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'trimmed.mp4'))
 
 
 @app.route('/trim/waveform', methods=['POST'])
@@ -625,48 +735,78 @@ def merge_route():
         f.save(path)
         input_paths.append(path)
 
-    # Detect if any file has a video stream
-    def has_video_stream(path):
-        r = subprocess.run(
-            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', path],
-            capture_output=True, text=True)
-        if r.returncode != 0:
-            return False
-        streams = json.loads(r.stdout).get('streams', [])
-        return any(s.get('codec_type') == 'video' for s in streams)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Merging…'}
 
-    is_video_merge = any(has_video_stream(p) for p in input_paths)
+    def run():
+        try:
+            # Detect if any file has a video stream
+            def has_video_stream(path):
+                r = subprocess.run(
+                    ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', path],
+                    capture_output=True, text=True)
+                if r.returncode != 0:
+                    return False
+                streams = json.loads(r.stdout).get('streams', [])
+                return any(s.get('codec_type') == 'video' for s in streams)
 
-    concat_path = os.path.join(TEMP_DIR, f'vt_concat_{uid}.txt')
-    with open(concat_path, 'w') as fh:
-        for p in input_paths:
-            fh.write(f"file '{p}'\n")
+            is_video_merge = any(has_video_stream(p) for p in input_paths)
 
-    if is_video_merge:
-        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-        # Explicit mapping and stereo downmix — see /convert for why.
-        cmd_prefix = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-                      '-map', '0:v:0?', '-map', '0:a:0?']
-        cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
-        download_name = 'merged_video.mp4'
-        r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
-    else:
-        output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
-        cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
-               '-c:a', 'libmp3lame', '-b:a', '192k',
-               output_path]
-        download_name = 'merged_audio.mp3'
-        r = subprocess.run(cmd, capture_output=True)
+            concat_path = os.path.join(TEMP_DIR, f'vt_concat_{uid}.txt')
+            with open(concat_path, 'w') as fh:
+                for p in input_paths:
+                    fh.write(f"file '{p}'\n")
 
-    cleanup_later(concat_path)
-    for p in input_paths:
-        cleanup_later(p)
+            if is_video_merge:
+                output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
+                # Explicit mapping and stereo downmix — see /convert for why.
+                cmd_prefix = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+                              '-map', '0:v:0?', '-map', '0:a:0?']
+                cmd_suffix = ['-c:a', 'aac', '-ac', '2', '-b:a', '192k', '-movflags', '+faststart', output_path]
+                download_name = 'merged_video.mp4'
+                r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
+            else:
+                output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp3')
+                cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_path,
+                       '-c:a', 'libmp3lame', '-b:a', '192k',
+                       output_path]
+                download_name = 'merged_audio.mp3'
+                r = subprocess.run(cmd, capture_output=True)
 
-    if r.returncode != 0:
-        return jsonify(error='Merge failed.'), 500
+            cleanup_later(concat_path)
+            for p in input_paths:
+                cleanup_later(p)
 
-    cleanup_later(output_path)
-    return send_file(output_path, as_attachment=True, download_name=download_name)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Merge failed.'}
+                return
+
+            _tasks[uid] = {'status': 'done', 'result': output_path, 'filename': download_name}
+            cleanup_later(output_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            for p in input_paths:
+                try: cleanup_later(p)
+                except: pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/merge/status/<task_id>')
+def merge_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/merge/result/<task_id>')
+def merge_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'merged.mp4'))
 
 
 @app.route('/thumbnail', methods=['POST'])
@@ -761,6 +901,18 @@ def thumbnail_route():
                      download_name=f'{stem(video_file.filename)}_with_thumbnail.mp4')
 
 
+CONVERT_SUPPORTED_FORMATS = {
+    'mp4':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mp4'},
+    'mov':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mov'},
+    'avi':  {'vcodec': 'libxvid',    'acodec': 'mp3',      'ext': '.avi'},
+    'mkv':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mkv'},
+    'webm': {'vcodec': 'libvpx-vp9', 'acodec': 'libopus', 'ext': '.webm'},
+    'gif':  {'vcodec': None,         'acodec': None,       'ext': '.gif'},
+    'mp3':  {'acodec': 'libmp3lame', 'abr': '192k',        'ext': '.mp3', 'audio_only': True},
+    'wav':  {'acodec': 'pcm_s16le',  'abr': None,          'ext': '.wav', 'audio_only': True},
+}
+
+
 @app.route('/convert', methods=['POST'])
 def convert_route():
     file = request.files.get('video')
@@ -768,82 +920,100 @@ def convert_route():
         return jsonify(error='No video uploaded'), 400
 
     target_fmt = request.form.get('format', 'mp4').lower().strip('.')
-    SUPPORTED = {
-        'mp4':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mp4'},
-        'mov':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mov'},
-        'avi':  {'vcodec': 'libxvid',    'acodec': 'mp3',      'ext': '.avi'},
-        'mkv':  {'vcodec': 'libx264',    'acodec': 'aac',      'ext': '.mkv'},
-        'webm': {'vcodec': 'libvpx-vp9', 'acodec': 'libopus', 'ext': '.webm'},
-        'gif':  {'vcodec': None,         'acodec': None,       'ext': '.gif'},
-        'mp3':  {'acodec': 'libmp3lame', 'abr': '192k',        'ext': '.mp3', 'audio_only': True},
-        'wav':  {'acodec': 'pcm_s16le',  'abr': None,          'ext': '.wav', 'audio_only': True},
-    }
+    if target_fmt not in CONVERT_SUPPORTED_FORMATS:
+        return jsonify(error=f'Unsupported format. Choose from: {", ".join(CONVERT_SUPPORTED_FORMATS)}'), 400
 
-    if target_fmt not in SUPPORTED:
-        return jsonify(error=f'Unsupported format. Choose from: {", ".join(SUPPORTED)}'), 400
-
+    original_name = file.filename
     input_path, uid = save_upload(file)
-    cfg = SUPPORTED[target_fmt]
-    output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{cfg["ext"]}')
+    _tasks[uid] = {'status': 'processing', 'progress': 'Converting…'}
 
-    if cfg.get('audio_only'):
-        # Downmix to stereo: a 5.1/multichannel source re-encoded without
-        # -ac keeps 6 channels but many players choke on that in mp3/wav.
-        cmd = ['ffmpeg', '-y', '-i', input_path, '-vn', '-ac', '2', '-c:a', cfg['acodec']]
-        if cfg.get('abr'):
-            cmd += ['-b:a', cfg['abr']]
-        cmd.append(output_path)
-        r = subprocess.run(cmd, capture_output=True)
-    elif target_fmt == 'gif':
-        # High-quality GIF via palette
-        palette = os.path.join(TEMP_DIR, f'vt_palette_{uid}.png')
-        subprocess.run(
-            ['ffmpeg', '-y', '-i', input_path,
-             '-vf', 'fps=15,scale=640:-1:flags=lanczos,palettegen', palette],
-            capture_output=True)
-        r = subprocess.run(
-            ['ffmpeg', '-y', '-i', input_path, '-i', palette,
-             '-filter_complex', 'fps=15,scale=640:-1:flags=lanczos[x];[x][1:v]paletteuse',
-             output_path],
-            capture_output=True)
-        cleanup_later(palette)
-    else:
-        # Explicit stream mapping rather than relying on ffmpeg's automatic
-        # selection — without it, some source files (e.g. an MKV with no
-        # audio track flagged as the "default" one) can end up with ffmpeg
-        # not auto-selecting an audio stream at all, silently dropping
-        # audio despite the command otherwise looking correct. The "?"
-        # suffix makes each map optional so this doesn't hard-fail when a
-        # stream type genuinely isn't present.
-        #
-        # -ac 2: a 5.1/multichannel source (e.g. EAC3 from an MKV) re-encoded
-        # to AAC without forcing the channel count keeps 6 channels but with
-        # an unrecognized channel layout in the mp4 container — the track is
-        # structurally present and ffprobe reports it fine, but many real
-        # players (notably Windows' built-in AAC decoder) silently refuse to
-        # play it, which reads to a user as "audio completely missing" even
-        # though the conversion "succeeded". Downmixing to stereo sidesteps
-        # the whole class of multichannel-layout compatibility problems.
-        cmd_prefix = ['ffmpeg', '-y', '-i', input_path, '-map', '0:v:0?', '-map', '0:a:0?']
-        cmd_suffix = ['-c:a', cfg['acodec'], '-ac', '2', '-b:a', '192k',
-                      '-movflags', '+faststart', output_path]
-        if cfg['vcodec'] == 'libx264':
-            # Only H.264 targets (mp4/mov/mkv) have a Quick Sync
-            # equivalent on this hardware — avi (Xvid) and webm (VP9)
-            # stay on their existing software encoders unconditionally.
-            r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
-        else:
-            cmd = cmd_prefix + ['-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18'] + cmd_suffix
-            r = subprocess.run(cmd, capture_output=True)
+    def run():
+        try:
+            cfg = CONVERT_SUPPORTED_FORMATS[target_fmt]
+            output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{cfg["ext"]}')
 
-    cleanup_later(input_path)
+            if cfg.get('audio_only'):
+                # Downmix to stereo: a 5.1/multichannel source re-encoded without
+                # -ac keeps 6 channels but many players choke on that in mp3/wav.
+                cmd = ['ffmpeg', '-y', '-i', input_path, '-vn', '-ac', '2', '-c:a', cfg['acodec']]
+                if cfg.get('abr'):
+                    cmd += ['-b:a', cfg['abr']]
+                cmd.append(output_path)
+                r = subprocess.run(cmd, capture_output=True)
+            elif target_fmt == 'gif':
+                # High-quality GIF via palette
+                palette = os.path.join(TEMP_DIR, f'vt_palette_{uid}.png')
+                subprocess.run(
+                    ['ffmpeg', '-y', '-i', input_path,
+                     '-vf', 'fps=15,scale=640:-1:flags=lanczos,palettegen', palette],
+                    capture_output=True)
+                r = subprocess.run(
+                    ['ffmpeg', '-y', '-i', input_path, '-i', palette,
+                     '-filter_complex', 'fps=15,scale=640:-1:flags=lanczos[x];[x][1:v]paletteuse',
+                     output_path],
+                    capture_output=True)
+                cleanup_later(palette)
+            else:
+                # Explicit stream mapping rather than relying on ffmpeg's automatic
+                # selection — without it, some source files (e.g. an MKV with no
+                # audio track flagged as the "default" one) can end up with ffmpeg
+                # not auto-selecting an audio stream at all, silently dropping
+                # audio despite the command otherwise looking correct. The "?"
+                # suffix makes each map optional so this doesn't hard-fail when a
+                # stream type genuinely isn't present.
+                #
+                # -ac 2: a 5.1/multichannel source (e.g. EAC3 from an MKV) re-encoded
+                # to AAC without forcing the channel count keeps 6 channels but with
+                # an unrecognized channel layout in the mp4 container — the track is
+                # structurally present and ffprobe reports it fine, but many real
+                # players (notably Windows' built-in AAC decoder) silently refuse to
+                # play it, which reads to a user as "audio completely missing" even
+                # though the conversion "succeeded". Downmixing to stereo sidesteps
+                # the whole class of multichannel-layout compatibility problems.
+                cmd_prefix = ['ffmpeg', '-y', '-i', input_path, '-map', '0:v:0?', '-map', '0:a:0?']
+                cmd_suffix = ['-c:a', cfg['acodec'], '-ac', '2', '-b:a', '192k',
+                              '-movflags', '+faststart', output_path]
+                if cfg['vcodec'] == 'libx264':
+                    # Only H.264 targets (mp4/mov/mkv) have a Quick Sync
+                    # equivalent on this hardware — avi (Xvid) and webm (VP9)
+                    # stay on their existing software encoders unconditionally.
+                    r = run_hw_encode_crf(cmd_prefix, cmd_suffix)
+                else:
+                    cmd = cmd_prefix + ['-c:v', cfg['vcodec'], '-preset', 'fast', '-crf', '18'] + cmd_suffix
+                    r = subprocess.run(cmd, capture_output=True)
 
-    if r.returncode != 0:
-        return jsonify(error='Conversion failed.'), 500
+            cleanup_later(input_path)
 
-    cleanup_later(output_path)
-    out_name = f'{stem(file.filename)}{cfg["ext"]}'
-    return send_file(output_path, as_attachment=True, download_name=out_name)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Conversion failed.'}
+                return
+
+            out_name = f'{stem(original_name)}{cfg["ext"]}'
+            _tasks[uid] = {'status': 'done', 'result': output_path, 'filename': out_name}
+            cleanup_later(output_path)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/convert/status/<task_id>')
+def convert_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/convert/result/<task_id>')
+def convert_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'converted'))
 
 
 # ── SVG to After Effects ────────────────────────────────────────────────────
