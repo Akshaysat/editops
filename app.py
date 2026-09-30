@@ -23,6 +23,22 @@ app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024 * 1024  # 20 GB max upload
 TEMP_DIR = tempfile.gettempdir()
 NULL_DEV = 'NUL' if os.name == 'nt' else '/dev/null'
 
+# How long a finished job's output file stays on disk waiting to be
+# downloaded. The async routes (Speed/Compress/Trim/Merge/Convert) hand
+# the browser a /result/<task_id> link instead of streaming the file back
+# in the original request, so the file has to outlive the job by however
+# long the user takes to notice it finished and click Download — not the
+# ~90s that was plenty back when the response *was* the download, and
+# which silently broke the download link for anyone who stepped away
+# during a long encode.
+#
+# This single timer is deliberately the only thing that reclaims the
+# file: re-arming a shorter cleanup on each /result fetch would be
+# tempting, but Speed Up fetches that same URL twice (once for the inline
+# preview player, once for the actual download), so an eager timer armed
+# by the preview could delete the file out from under the download.
+RESULT_FILE_TTL = 7200
+
 # Every teammate runs their own local copy of this app, so feedback can't
 # just live in a local file — it needs to land somewhere shared. This key
 # is Supabase's "anon" public key: it's meant to be embedded in distributed
@@ -377,7 +393,7 @@ def speed_route():
                     'status': 'done', 'result': output_path,
                     'filename': f'{stem(original_name)}_sped_up.mp3',
                 }
-                cleanup_later(output_path)
+                cleanup_later(output_path, delay=RESULT_FILE_TTL)
                 return
 
             output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
@@ -406,7 +422,7 @@ def speed_route():
                 'status': 'done', 'result': output_path,
                 'filename': f'{stem(original_name)}_sped_up.mp4',
             }
-            cleanup_later(output_path)
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
             cleanup_later(input_path)
@@ -471,7 +487,7 @@ def compress_route():
                     'status': 'done', 'result': output_path,
                     'filename': f'{stem(original_name)}_compressed.mp3',
                 }
-                cleanup_later(output_path)
+                cleanup_later(output_path, delay=RESULT_FILE_TTL)
                 return
 
             passlog    = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
@@ -513,7 +529,7 @@ def compress_route():
                 'status': 'done', 'result': output_path,
                 'filename': f'{stem(original_name)}_compressed.mp4',
             }
-            cleanup_later(output_path)
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
             cleanup_later(input_path)
@@ -636,7 +652,7 @@ def trim_route():
                 'status': 'done', 'result': output_path,
                 'filename': f'{stem(original_name)}_trimmed{out_ext}',
             }
-            cleanup_later(output_path)
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
             cleanup_later(input_path)
@@ -781,7 +797,7 @@ def merge_route():
                 return
 
             _tasks[uid] = {'status': 'done', 'result': output_path, 'filename': download_name}
-            cleanup_later(output_path)
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
             for p in input_paths:
@@ -990,7 +1006,7 @@ def convert_route():
 
             out_name = f'{stem(original_name)}{cfg["ext"]}'
             _tasks[uid] = {'status': 'done', 'result': output_path, 'filename': out_name}
-            cleanup_later(output_path)
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
         except Exception as e:
             _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
             cleanup_later(input_path)
