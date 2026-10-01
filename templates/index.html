@@ -491,6 +491,8 @@
     .md-option:last-child { border-bottom: none; }
     .md-option:hover { background: rgba(0,0,0,0.025); }
     .md-option-text { flex: 1; color: var(--text); line-height: 1.5; }
+    .md-option-thumb { align-items: flex-start; }
+    .md-design-idea { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-top: 3px; }
     .md-copy {
       flex-shrink: 0; background: none; border: 1px solid var(--border); border-radius: 6px;
       color: var(--muted); cursor: pointer; font-size: 12px; padding: 4px 10px; font-family: inherit;
@@ -2909,9 +2911,26 @@ function renderMetadataResults(data) {
     return `<div class="tr-panel"><div class="tr-panel-header"><span>${title}</span></div><div class="tr-preview">${rows}</div></div>`;
   };
 
+  // Thumbnail options carry a design_idea alongside the overlay text —
+  // rendered as its own muted line rather than reusing section()'s plain
+  // single-line layout, and only the overlay text itself is copyable
+  // (the design idea is creative direction for whoever builds the
+  // thumbnail image, not something typed into a title/overlay field).
+  const thumbRows = (data.thumbnail_texts || []).map(t => (
+    `<div class="md-option md-option-thumb">` +
+      `<div class="md-option-text">` +
+        `<div>${escHtml(t.text)}</div>` +
+        (t.design_idea ? `<div class="md-design-idea">💡 ${escHtml(t.design_idea)}</div>` : '') +
+      `</div>` +
+      `<button class="md-copy" onclick="copyMetadataOption(this)" data-text="${escHtml(t.text)}">Copy</button>` +
+    `</div>`
+  )).join('');
+  const thumbSection = `<div class="tr-panel"><div class="tr-panel-header"><span>Thumbnail Text</span></div>` +
+    `<div class="tr-preview">${thumbRows}</div></div>`;
+
   document.getElementById('md-results').innerHTML =
     section('Titles', data.titles) +
-    section('Thumbnail Text', data.thumbnail_texts) +
+    thumbSection +
     section('Descriptions', data.descriptions);
 }
 

@@ -2764,31 +2764,68 @@ def translate_dub_result(task_id):
 def gemini_generate_metadata(script_text):
     """Generate 3 options each for video title, thumbnail text, and
     description from a script, via Gemini. Returns a dict with keys
-    "titles", "thumbnail_texts", "descriptions", each a list of up to 3
-    strings. Raises on failure."""
+    "titles" and "descriptions" (each a list of up to 3 strings), and
+    "thumbnail_texts" (a list of up to 3 {text, design_idea} dicts — a
+    design_idea is a concrete visual direction for that thumbnail, not
+    just overlay copy). Raises on failure."""
     client = _gemini_client()
     prompt = (
-        'Here is a video script. Based on it, generate YouTube content:\n\n'
-        '1) "titles": 3 distinct video title options — attention-grabbing '
-        'but accurate to the content, each under 70 characters.\n'
-        '2) "thumbnail_texts": 3 distinct short thumbnail overlay text '
-        'options — punchy, 2-6 words, the kind of bold text layered on a '
-        'YouTube thumbnail image, not a full sentence.\n'
+        'Here is a video script. Based on it, generate YouTube content '
+        'optimized to get clicks — punchy and attention-grabbing, the way '
+        'a strong-performing YouTube video\'s metadata reads — while '
+        'staying truthful to the actual content; curiosity and urgency are '
+        'fine, outright misleading claims are not.\n\n'
+        '1) "titles": 3 distinct video title options, each under 70 '
+        'characters. If the script contains a concrete number (a stat, a '
+        'price, a percentage, a count, a time period, etc.), prefer '
+        'working that exact number into the title where it fits '
+        'naturally — a specific number reads as credible and concrete, '
+        'not generic.\n'
+        '2) "thumbnail_texts": 3 distinct thumbnail options, each an '
+        'object with "text" and "design_idea":\n'
+        '   - "text": punchy, 2-6 words, the kind of bold overlay text '
+        'slapped on a YouTube thumbnail — not a full sentence. Same as '
+        'titles: if the script has a concrete number, lead with it here '
+        'when it fits (e.g. "₹50 LAKH MISTAKE", "3 RULES", "90% FAIL '
+        'THIS") — a number is one of the highest-converting thumbnail '
+        'elements since it jumps out immediately even at small size.\n'
+        '   - "design_idea": one concrete sentence on how to actually '
+        'compose the thumbnail image around that text — where the '
+        'text/number sits in frame, what facial expression or reaction '
+        'shot to use, what color accents, arrows, or circles to add, '
+        'what belongs in the background. Specific enough that a designer '
+        'could act on it directly — never generic advice like "make it '
+        'eye-catching".\n'
         '3) "descriptions": 3 distinct video description options for the '
         'YouTube description box — 2-4 sentences each, summarizing the '
         'video and hooking the viewer to watch.\n\n'
         'Return ONLY a JSON object (no markdown, no commentary) with keys '
-        '"titles", "thumbnail_texts", "descriptions", each an array of '
-        'exactly 3 strings.\n\nSCRIPT:\n' + script_text
+        '"titles" (array of 3 strings), "thumbnail_texts" (array of 3 '
+        'objects, each with string fields "text" and "design_idea"), and '
+        '"descriptions" (array of 3 strings).\n\nSCRIPT:\n' + script_text
     )
     response = client.models.generate_content(
         model='gemini-flash-latest',
         contents=[prompt],
     )
     parsed = _parse_gemini_json(response)
+
+    thumbnail_texts = []
+    for t in parsed.get('thumbnail_texts', [])[:3]:
+        if isinstance(t, dict):
+            thumbnail_texts.append({
+                'text': str(t.get('text') or '').strip(),
+                'design_idea': str(t.get('design_idea') or '').strip(),
+            })
+        else:
+            # Defensive fallback if Gemini ever returns a plain string
+            # instead of the requested {text, design_idea} object.
+            thumbnail_texts.append({'text': str(t).strip(), 'design_idea': ''})
+
     return {
-        key: [str(t).strip() for t in parsed.get(key, [])][:3]
-        for key in ('titles', 'thumbnail_texts', 'descriptions')
+        'titles': [str(t).strip() for t in parsed.get('titles', [])][:3],
+        'thumbnail_texts': thumbnail_texts,
+        'descriptions': [str(t).strip() for t in parsed.get('descriptions', [])][:3],
     }
 
 
