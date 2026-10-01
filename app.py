@@ -117,12 +117,13 @@ def auto_update():
         req_changed = subprocess.run(
             ['git', 'diff', old_head, 'HEAD', '--name-only'],
             cwd=repo_dir, capture_output=True, text=True).stdout
-        # EDITOPS_REQUIREMENTS_FILE (set by start_windows_server.bat) takes
-        # priority over the OS-based guess below — without it, a lite-server
-        # deployment set up with requirements-server.txt would silently
-        # reinstall the full requirements-windows.txt on its next update,
-        # pulling back in openai-whisper/easyocr that setup deliberately
-        # left out.
+        # EDITOPS_REQUIREMENTS_FILE (set by start_windows_server.bat,
+        # register_mac_launch_daemon.command, or start_mac_server.command)
+        # takes priority over the OS-based guess below — without it, a
+        # lite-server deployment set up with requirements-server.txt would
+        # silently reinstall the full desktop requirements on its next
+        # update, pulling back in openai-whisper/mlx-whisper/easyocr that
+        # setup deliberately left out.
         req_file = os.environ.get('EDITOPS_REQUIREMENTS_FILE') or \
                    ('requirements-windows.txt' if os.name == 'nt' else 'requirements.txt')
         pip_bin  = os.path.join('venv', 'Scripts', 'pip.exe') if os.name == 'nt' \
@@ -2857,30 +2858,28 @@ if __name__ == '__main__':
         print('   Mac:     brew install ffmpeg')
         print('   Windows: https://ffmpeg.org/download.html\n')
 
-    # On Windows only, prefer Waitress (a production WSGI server) over
-    # Flask's built-in dev server — Werkzeug's own dev server explicitly
-    # warns it isn't built for this, and on a shared Windows machine acting
-    # as a real server for multiple teammates, its I/O handling is a
-    # measurable bottleneck for large video uploads. macOS/Linux are
-    # untouched — every teammate running their own local copy keeps today's
-    # exact dev-server behavior; this only takes a different path when
-    # os.name == 'nt'.
-    if os.name == 'nt':
-        try:
-            from waitress import serve
-            print('\n✅  Starting server (Waitress — production WSGI server)...')
-            print('👉  Open your browser: http://localhost:5001')
-            print('    (Press Ctrl+C to stop)\n')
-            serve(app, host='0.0.0.0', port=5001, threads=6)
-        except ImportError:
-            print('\n⚠️  Waitress not installed — falling back to the dev server.')
-            print('   For faster uploads, run: pip install waitress\n')
-            print('✅  Starting server...')
-            print('👉  Open your browser: http://localhost:5001')
-            print('    (Press Ctrl+C to stop)\n')
-            app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)
-    else:
-        print('\n✅  Starting server...')
+    # Prefer Waitress (a production WSGI server) over Flask's built-in dev
+    # server whenever it's installed — Werkzeug's own dev server explicitly
+    # warns it isn't built for this, and on any machine acting as a real
+    # server for multiple teammates (not just a Windows-specific concern —
+    # the same now applies to a Mac Mini hosting EditOps for the office),
+    # its I/O handling is a measurable bottleneck for large video uploads.
+    # This is intentionally gated on whether `waitress` is installed, not
+    # on OS: a teammate's personal local copy (installed from the default
+    # requirements.txt, which doesn't include it) keeps today's exact
+    # dev-server behavior either way, while any install that pulled in
+    # requirements-windows.txt or requirements-server.txt (both of which
+    # do include it) gets Waitress automatically, on Mac or Windows alike.
+    try:
+        from waitress import serve
+        print('\n✅  Starting server (Waitress — production WSGI server)...')
+        print('👉  Open your browser: http://localhost:5001')
+        print('    (Press Ctrl+C to stop)\n')
+        serve(app, host='0.0.0.0', port=5001, threads=6)
+    except ImportError:
+        print('\n⚠️  Waitress not installed — falling back to the dev server.')
+        print('   For faster uploads on a shared/multi-user install, run: pip install waitress\n')
+        print('✅  Starting server...')
         print('👉  Open your browser: http://localhost:5001')
         print('    (Press Ctrl+C to stop)\n')
         app.run(debug=False, host='0.0.0.0', port=5001, threaded=True)
