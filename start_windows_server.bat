@@ -2,10 +2,10 @@
 REM ── EditOps Launcher (Windows, lite server build) ───────────────────────────
 REM Same as start_windows.bat, but installs from requirements-server.txt
 REM instead of requirements-windows.txt — skips openai-whisper, easyocr,
-REM pyspellchecker, and svgelements, since this deployment doesn't use local
-REM Whisper, Spelling QA, or SVG to After Effects. Use this instead of
-REM start_windows.bat on machines set up this way, so re-running it doesn't
-REM reinstall the heavy packages this deployment doesn't need.
+REM and pyspellchecker, since this deployment doesn't use local Whisper or
+REM Spelling QA. Use this instead of start_windows.bat on machines set up
+REM this way, so re-running it doesn't reinstall the heavy packages this
+REM deployment doesn't need.
 cd /d "%~dp0"
 set EDITOPS_REQUIREMENTS_FILE=requirements-server.txt
 
