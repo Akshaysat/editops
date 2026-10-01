@@ -2875,7 +2875,14 @@ if __name__ == '__main__':
         print('\n✅  Starting server (Waitress — production WSGI server)...')
         print('👉  Open your browser: http://localhost:5001')
         print('    (Press Ctrl+C to stop)\n')
-        serve(app, host='0.0.0.0', port=5001, threads=6)
+        # Waitress enforces its own request-body cap independently of
+        # Flask's MAX_CONTENT_LENGTH above (set to 20GB) — its default is
+        # a mere 1GiB, which silently rejected any larger upload with a
+        # bare "413 Request Entity Too Large" from Waitress itself, never
+        # even reaching Flask's config. Matched to MAX_CONTENT_LENGTH so
+        # the two layers agree instead of Waitress quietly overriding it.
+        serve(app, host='0.0.0.0', port=5001, threads=6,
+              max_request_body_size=app.config['MAX_CONTENT_LENGTH'])
     except ImportError:
         print('\n⚠️  Waitress not installed — falling back to the dev server.')
         print('   For faster uploads on a shared/multi-user install, run: pip install waitress\n')
