@@ -10,3 +10,4 @@ test_videos/
 .env
 startup_log.txt
 editops_server.log
+feedback.db

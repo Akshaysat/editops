@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil, sqlite3
 import urllib.request, urllib.error, urllib.parse
 import zipfile, io
 
@@ -10,8 +10,7 @@ except ImportError:
     pass
 
 # Each teammate provides their own key locally in a gitignored .env file
-# (GEMINI_API_KEY=...) — never commit this, unlike the Supabase anon key
-# above which is safe to embed because it's gated by RLS, not secrecy.
+# (GEMINI_API_KEY=...) — never commit this.
 GEMINI_API_KEY      = os.environ.get('GEMINI_API_KEY')
 ELEVENLABS_API_KEY  = os.environ.get('ELEVENLABS_API_KEY')
 
@@ -39,36 +38,54 @@ NULL_DEV = 'NUL' if os.name == 'nt' else '/dev/null'
 # by the preview could delete the file out from under the download.
 RESULT_FILE_TTL = 7200
 
-# Every teammate runs their own local copy of this app, so feedback can't
-# just live in a local file — it needs to land somewhere shared. This key
-# is Supabase's "anon" public key: it's meant to be embedded in distributed
-# client code like this. Access is restricted by the table's Row Level
-# Security policies (insert/select/update/delete on `feedback` only), not
-# by keeping the key secret.
-SUPABASE_URL      = 'https://yewhqjkdbmkrzosyuwwa.supabase.co'
-SUPABASE_ANON_KEY = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIs'
-                      'InJlZiI6Inlld2hxamtkYm1rcnpvc3l1d3dhIiwicm9sZSI6ImFub24iLCJp'
-                      'YXQiOjE3ODUyNTIxNzAsImV4cCI6MjEwMDgyODE3MH0.e9ySko38XKZcrl9H'
-                      'vzp6T9XmmZZjQ0avop2gFZAztQM')
+# Feedback used to live in a shared Supabase project — needed back when
+# every teammate ran their own local copy of this app, so a local file
+# couldn't be shared between them. That project's DNS record has since
+# gone dark (confirmed via direct lookup: an authoritative NXDOMAIN-style
+# response from Cloudflare, Supabase's own DNS provider, not a timeout or
+# firewall issue — the project itself is simply gone), and the
+# constraint that justified an external service no longer holds anyway:
+# EditOps now runs as one shared server (see register_mac_launch_daemon
+# .command) that everyone connects to, so a local SQLite file on that one
+# machine is just as "shared" as Supabase was, with nothing external to
+# expire again. Any feedback submitted before the Supabase project died
+# is unfortunately unrecoverable through this app — there was no way to
+# export it once DNS for the project was already gone.
+FEEDBACK_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'feedback.db')
 
 
-def supabase_request(method, path, body=None):
-    """Call the Supabase REST (PostgREST) API. `path` includes the table
-    name and any query string, e.g. 'feedback' or 'qa_word_feedback?...'."""
-    req = urllib.request.Request(
-        f'{SUPABASE_URL}/rest/v1/{path}',
-        data=json.dumps(body).encode() if body is not None else None,
-        method=method,
-        headers={
-            'apikey':        SUPABASE_ANON_KEY,
-            'Authorization': f'Bearer {SUPABASE_ANON_KEY}',
-            'Content-Type':  'application/json',
-            'Prefer':        'return=representation',
-        },
-    )
-    with urllib.request.urlopen(req, timeout=10) as r:
-        raw = r.read()
-        return json.loads(raw) if raw else None
+def _feedback_db():
+    """Open a connection to the local feedback database, creating the
+    schema on first use if it doesn't exist yet. A fresh connection per
+    call rather than one shared long-lived connection — SQLite
+    connections aren't safe to share across the threads Flask/Waitress
+    handle requests on, and opening one is cheap enough that pooling
+    isn't worth the complexity for a low-traffic internal feature like
+    this. Caller is responsible for closing it."""
+    conn = sqlite3.connect(FEEDBACK_DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS feedback (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            type       TEXT NOT NULL,
+            message    TEXT NOT NULL,
+            name       TEXT,
+            status     TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    ''')
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS qa_word_feedback (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            word       TEXT NOT NULL,
+            verdict    TEXT NOT NULL,
+            reason     TEXT,
+            context    TEXT,
+            video_name TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    ''')
+    return conn
 
 
 # ── Auto-update ───────────────────────────────────────────────────────────────
@@ -1046,19 +1063,25 @@ def feedback_submit():
         return jsonify(error='Please enter a description.'), 400
 
     try:
-        supabase_request('POST', 'feedback', {'type': fb_type, 'message': message, 'name': name})
+        conn = _feedback_db()
+        conn.execute('INSERT INTO feedback (type, message, name) VALUES (?, ?, ?)',
+                     (fb_type, message, name))
+        conn.commit()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+        return jsonify(error='Could not save feedback — the local feedback database could not be written to.'), 500
     return jsonify(ok=True)
 
 
 @app.route('/feedback/list')
 def feedback_list():
     try:
-        rows = supabase_request('GET', 'feedback?select=*&order=id.desc')
+        conn = _feedback_db()
+        rows = conn.execute('SELECT * FROM feedback ORDER BY id DESC').fetchall()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
-    return jsonify(rows)
+        return jsonify(error='Could not load feedback from the local database.'), 500
+    return jsonify([dict(r) for r in rows])
 
 
 @app.route('/feedback/<int:fb_id>/status', methods=['POST'])
@@ -1069,18 +1092,24 @@ def feedback_set_status(fb_id):
         return jsonify(error='Invalid status'), 400
 
     try:
-        supabase_request('PATCH', f'feedback?id=eq.{fb_id}', {'status': status})
+        conn = _feedback_db()
+        conn.execute('UPDATE feedback SET status = ? WHERE id = ?', (status, fb_id))
+        conn.commit()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+        return jsonify(error='Could not update feedback in the local database.'), 500
     return jsonify(ok=True)
 
 
 @app.route('/feedback/<int:fb_id>/delete', methods=['POST'])
 def feedback_delete(fb_id):
     try:
-        supabase_request('DELETE', f'feedback?id=eq.{fb_id}')
+        conn = _feedback_db()
+        conn.execute('DELETE FROM feedback WHERE id = ?', (fb_id,))
+        conn.commit()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+        return jsonify(error='Could not delete feedback from the local database.'), 500
     return jsonify(ok=True)
 
 
@@ -1260,13 +1289,18 @@ FINANCE_JARGON_WORDS = frozenset({
 
 
 def qa_get_dismissed_words():
-    """Fetches the team's accumulated verdicts from Supabase and returns the
-    set of words currently marked "not a mistake" — the most recent verdict
-    per word wins, so a word that was dismissed and later re-confirmed as a
-    real mistake stops being suppressed. Returns an empty set on any error
-    (network down, table missing) rather than failing the whole scan."""
+    """Fetches the team's accumulated verdicts from the local feedback
+    database and returns the set of words currently marked "not a
+    mistake" — the most recent verdict per word wins, so a word that was
+    dismissed and later re-confirmed as a real mistake stops being
+    suppressed. Returns an empty set on any error (disk issue, table
+    missing) rather than failing the whole scan."""
     try:
-        rows = supabase_request('GET', 'qa_word_feedback?select=word,verdict,created_at&order=created_at.desc')
+        conn = _feedback_db()
+        rows = conn.execute(
+            'SELECT word, verdict FROM qa_word_feedback ORDER BY created_at DESC'
+        ).fetchall()
+        conn.close()
     except Exception:
         return set()
     if not rows:
@@ -1603,25 +1637,30 @@ def qacheck_feedback_route():
         return jsonify(error='Invalid reason.'), 400
 
     try:
-        supabase_request('POST', 'qa_word_feedback', {
-            'word': word, 'verdict': verdict, 'reason': reason or None,
-            'context': context, 'video_name': video_name,
-        })
+        conn = _feedback_db()
+        conn.execute(
+            'INSERT INTO qa_word_feedback (word, verdict, reason, context, video_name) VALUES (?, ?, ?, ?, ?)',
+            (word, verdict, reason or None, context, video_name),
+        )
+        conn.commit()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+        return jsonify(error='Could not save feedback — the local feedback database could not be written to.'), 500
     return jsonify(ok=True)
 
 
 @app.route('/qacheck/feedback/list')
 def qacheck_feedback_list_route():
     try:
-        rows = supabase_request('GET', 'qa_word_feedback?select=*&order=created_at.desc')
+        conn = _feedback_db()
+        rows = conn.execute('SELECT * FROM qa_word_feedback ORDER BY created_at DESC').fetchall()
+        conn.close()
     except Exception:
-        return jsonify(error='Could not reach the feedback server. Check your internet connection.'), 502
+        return jsonify(error='Could not load feedback from the local database.'), 500
     latest = {}
     for row in rows or []:
         if row['word'] not in latest:
-            latest[row['word']] = row
+            latest[row['word']] = dict(row)
     return jsonify(sorted(latest.values(), key=lambda r: r['word']))
 
 
