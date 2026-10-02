@@ -499,56 +499,10 @@
     }
     .md-copy:hover { color: var(--text); border-color: var(--text); }
 
-    /* ── Flagged-word count badge (used by Spelling QA) ── */
-    .sp-badge { background: #E03131; color: #fff; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; }
-
     /* ── Full Script panel ── */
     .tr-script-copy { background: var(--text); color: #fff; border: none; border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
     .tr-script-copy:hover { background: #333; }
     .tr-script-body { padding: 12px 14px; font-size: 13px; line-height: 1.75; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); user-select: text; }
-
-    /* ── Spelling QA flagged items ── */
-    .qa-list { max-height: 480px; overflow-y: auto; }
-    .qa-item { display: flex; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; }
-    .qa-item:last-child { border-bottom: none; }
-    .qa-item:hover { background: #F8F9FA; }
-    .qa-thumb { width: 200px; height: 90px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border); flex-shrink: 0; cursor: pointer; background: #000; }
-    .qa-item-body { flex: 1; min-width: 0; }
-    .qa-item-word { font-weight: 700; color: var(--error); font-size: 14px; }
-    .qa-item-sugg { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-    .qa-item-ts { font-family: ui-monospace, 'SF Mono', monospace; color: var(--muted); font-size: 11px; margin-top: 5px; cursor: pointer; display: inline-block; }
-    .qa-item-ts:hover { color: var(--text); text-decoration: underline; }
-    .qa-item.qa-dismissed { opacity: 0.4; }
-    .qa-feedback { display: flex; gap: 8px; margin-top: 8px; }
-    .qa-feedback button {
-      font-size: 11.5px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
-      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer;
-      font-family: inherit; transition: all 0.15s;
-    }
-    .qa-feedback button:hover { color: var(--text); border-color: var(--text); }
-    .qa-feedback .qa-fb-mistake:hover { color: var(--error); border-color: var(--error); }
-    .qa-feedback .qa-fb-not-mistake:hover { color: var(--success); border-color: var(--success); }
-    .qa-feedback-note { font-size: 11.5px; color: var(--muted); margin-top: 8px; font-style: italic; }
-    .qa-reason-prompt { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-    .qa-reason-label { font-size: 11.5px; color: var(--muted); }
-    .qa-reason-btns { display: flex; gap: 6px; flex-wrap: wrap; }
-    .qa-reason-btns button {
-      font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 6px;
-      border: 1px solid var(--border); background: #fff; color: var(--muted); cursor: pointer; font-family: inherit;
-    }
-    .qa-reason-btns button:hover { color: var(--success); border-color: var(--success); }
-    .qa-reason-back { align-self: flex-start; font-size: 11px; color: var(--muted); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; font-family: inherit; }
-    .qa-reason-back:hover { color: var(--text); }
-
-    /* ── Spelling QA learned words ── */
-    .qa-learned-list { max-height: 340px; overflow-y: auto; }
-    .qa-learned-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
-    .qa-learned-item:last-child { border-bottom: none; }
-    .qa-learned-badge { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; padding: 3px 8px; border-radius: 100px; white-space: nowrap; flex-shrink: 0; }
-    .qa-learned-badge.mistake     { background: #FDF3F3; color: var(--error); }
-    .qa-learned-badge.not-mistake { background: #F0FAF3; color: var(--success); }
-    .qa-learned-word { font-weight: 600; color: var(--text); flex-shrink: 0; }
-    .qa-learned-context { color: var(--muted); font-size: 12px; flex: 1; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     /* ── Trim timeline ── */
     .trim-timecode {
@@ -702,8 +656,6 @@
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
     <div class="nav-section">Content</div>
     <button class="nav-item"        data-tab="metadata"   onclick="switchTab(this,'metadata')"><span class="ni">✎</span> Titles & Description</button>
-    <div class="nav-section">Review</div>
-    <button class="nav-item"        data-tab="qacheck"    onclick="switchTab(this,'qacheck')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
     <button class="nav-item"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
     <div class="nav-section">Support</div>
@@ -1150,45 +1102,6 @@
     </div>
   </div>
 
-  <!-- ══ SPELLING QA ══ -->
-  <div id="panel-qacheck" class="panel">
-    <div class="page-header"><h1>Spelling QA</h1><p>Scan a video for spelling mistakes in on-screen graphics, titles, and lower thirds — text a script spellchecker can't see because it only exists as pixels.</p></div>
-    <div class="card">
-      <h2>Spelling QA</h2>
-      <p class="desc">Spelling QA</p>
-
-      <div class="dropzone" id="dz-qacheck" onclick="document.getElementById('f-qacheck').click()">
-        <div class="dz-icon">🔍</div>
-        <div class="dz-default">
-          <div class="dz-label">Drop your video here or <b>browse</b></div>
-        </div>
-        <div class="dz-file-info" id="fi-qacheck"></div>
-        <input type="file" id="f-qacheck" accept="video/*" style="display:none" onchange="onFile(this,'qacheck')">
-      </div>
-
-      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
-        🔍 Samples frames throughout the video, reads on-screen text via OCR, then spellchecks it. English only for now.<br>
-        🖼️ OCR can misread stylized text — each flag shows a thumbnail so you can confirm at a glance instead of chasing false positives.<br>
-        📦 First run downloads the OCR model (cached after that).
-      </div>
-
-      <button class="submit-btn" onclick="submitQACheck()">Scan for Spelling Mistakes</button>
-      <div class="progress-wrap" id="pw-qacheck">
-        <div class="progress-meta"><span id="pl-qacheck">Uploading…</span><span id="pp-qacheck">0%</span></div>
-        <div class="progress-bar"><div class="progress-fill" id="pf-qacheck"></div></div>
-      </div>
-      <div class="result-box" id="rb-qacheck"></div>
-      <div id="qa-extra"></div>
-      <div class="error-box"  id="eb-qacheck"></div>
-
-      <hr class="divider">
-
-      <h2 style="display:block;font-size:14px;font-weight:700;margin-bottom:4px;color:var(--text);">Learned Words</h2>
-      <p style="font-size:12.5px;color:var(--muted);margin-bottom:12px;">Words the team has marked as real mistakes or false positives. Marking "Not a mistake" stops that word from being flagged in future scans.</p>
-      <div class="qa-learned-list" id="qa-learned-list"><div class="fb-empty">Loading…</div></div>
-    </div>
-  </div>
-
   <!-- ══ YOUTUBE DOWNLOADER ══ -->
   <div id="panel-ytdl" class="panel">
     <div class="page-header"><h1>YouTube Downloader</h1><p>Download any YouTube video locally. Paste the URL, choose quality, and hit Download.</p></div>
@@ -1415,7 +1328,6 @@ function switchTab(btn, tab) {
   btn.classList.add('active');
   document.getElementById('panel-' + tab).classList.add('active');
   if (tab === 'feedback') loadFeedbackList();
-  if (tab === 'qacheck') loadQALearnedWords();
 }
 
 // ── Feedback ───────────────────────────────────────────────────────────────
@@ -2991,240 +2903,6 @@ function copyMetadataOption(btn) {
   });
 }
 
-// ── Spelling QA ───────────────────────────────────────────────────────────
-function submitQACheck() {
-  const file = document.getElementById('f-qacheck').files[0];
-  if (!file) return alert('Please select a video first.');
-
-  resetUI('qacheck');
-  document.getElementById('qa-extra').innerHTML = '';
-
-  const form = new FormData();
-  form.append('video', file);
-
-  const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/qacheck');
-  xhr.responseType = 'json';
-
-  showProgress('qacheck', 0, 'Uploading…');
-
-  const uploadStart = Date.now();
-  xhr.upload.onprogress = e => {
-    if (!e.lengthComputable) return;
-    const pct = Math.round(e.loaded / e.total * 25);
-    showProgress('qacheck', pct, uploadLabel(e, uploadStart));
-  };
-
-  let uploadEndTime = null;
-  xhr.upload.onload = () => {
-    uploadEndTime = Date.now();
-    showProgress('qacheck', 30, 'Extracting frames…');
-  };
-
-  xhr.onload = () => {
-    if (xhr.status !== 200) {
-      const msg = (xhr.response && xhr.response.error) || 'Upload failed.';
-      showError('qacheck', msg);
-      return;
-    }
-    const uploadMs = uploadEndTime ? uploadEndTime - uploadStart : null;
-    pollQACheck(xhr.response.task_id, Date.now(), uploadMs);
-  };
-
-  xhr.onerror = () => showError('qacheck', 'Network error — is the server running?');
-
-  xhr.send(form);
-}
-
-function pollQACheck(taskId, startTime, uploadMs) {
-  const pf = document.getElementById('pf-qacheck');
-  const pp = document.getElementById('pp-qacheck');
-  const pl = document.getElementById('pl-qacheck');
-
-  const interval = setInterval(async () => {
-    if (!document.getElementById('pw-qacheck').classList.contains('visible')) {
-      clearInterval(interval);
-      return;
-    }
-
-    let data;
-    try {
-      const res = await fetch('/qacheck/status/' + taskId);
-      data = await res.json();
-    } catch {
-      clearInterval(interval);
-      showError('qacheck', 'Lost connection to server.');
-      return;
-    }
-
-    if (!data || data.status === 'processing') {
-      const elapsed = Math.min(Date.now() - startTime, 600000);
-      const pct = Math.round(30 + elapsed / 600000 * 65);
-      pl.textContent = (data && data.progress) ? data.progress : 'Scanning…';
-      pp.textContent = pct + '%';
-      pf.style.width = pct + '%';
-      return;
-    }
-
-    clearInterval(interval);
-
-    if (data.status === 'done') {
-      document.getElementById('pw-qacheck').classList.remove('visible');
-      renderQAResult(data, uploadMs, Date.now() - startTime);
-    } else {
-      showError('qacheck', data.error || 'Scan failed.');
-    }
-  }, 2000);
-}
-
-function renderQAResult(data, uploadMs, processMs) {
-  const rb        = document.getElementById('rb-qacheck');
-  const extra     = document.getElementById('qa-extra');
-  const fileInput = document.getElementById('f-qacheck');
-  const file      = fileInput.files[0];
-
-  let playerHtml = '';
-  if (file) {
-    playerHtml = `<div class="tr-player-wrap"><video id="qa-player" controls></video></div>`;
-  }
-
-  const count = data.issues.length;
-  rb.innerHTML = `
-    <div class="result-title">${count ? '⚠️ ' + count + ' possible spelling issue' + (count === 1 ? '' : 's') + ' found' : '✓ No spelling issues found'}</div>
-    ${timingStatsHtml(uploadMs, processMs)}
-    ${playerHtml}
-    <div style="font-size:12px;color:var(--muted);">Scanned ${data.frames_scanned} sampled frame${data.frames_scanned === 1 ? '' : 's'} across ${fmtTranscriptTime(data.duration)}.</div>`;
-  rb.classList.add('visible');
-
-  if (file) {
-    document.getElementById('qa-player').src = URL.createObjectURL(file);
-  }
-
-  _qaIssues = data.issues;
-  _qaVideoName = file ? file.name : '';
-
-  if (count) {
-    const items = data.issues.map((iss, i) => `
-      <div class="qa-item" id="qa-item-${i}">
-        <img class="qa-thumb" src="${iss.thumbnail}" onclick="qaSeek(${iss.start})" title="Click to jump to this moment">
-        <div class="qa-item-body">
-          <div class="qa-item-word">${escapeHtml(iss.word)}</div>
-          ${iss.suggestions.length ? `<div class="qa-item-sugg">→ ${iss.suggestions.map(escapeHtml).join(', ')}</div>` : ''}
-          <div class="qa-item-ts" onclick="qaSeek(${iss.start})">${fmtTranscriptTime(iss.start)}</div>
-          <div class="qa-feedback" id="qa-fb-${i}">
-            <button class="qa-fb-mistake" onclick="qaSubmitFeedback(${i},'mistake')">✓ Real mistake</button>
-            <button class="qa-fb-not-mistake" onclick="qaSubmitFeedback(${i},'not_mistake')">✗ Not a mistake</button>
-          </div>
-        </div>
-      </div>`).join('');
-    extra.innerHTML = `
-      <div class="tr-panel">
-        <div class="tr-panel-header"><span>Flagged Words</span><span class="sp-badge">${count}</span></div>
-        <div class="qa-list">${items}</div>
-      </div>`;
-  } else {
-    extra.innerHTML = '';
-  }
-}
-
-// ── Spelling QA feedback (teaches the tool which flags are real) ───────────
-let _qaIssues = [];
-let _qaVideoName = '';
-
-const QA_REASON_LABELS = {
-  ocr_misread: 'OCR misread', animation: 'Mid-animation', not_english: 'Not English', other: 'Other',
-};
-
-function qaSubmitFeedback(idx, verdict) {
-  if (verdict === 'not_mistake') {
-    qaShowReasonPicker(idx);
-    return;
-  }
-  qaSendFeedback(idx, 'mistake', null);
-}
-
-function qaShowReasonPicker(idx) {
-  const fb = document.getElementById(`qa-fb-${idx}`);
-  const btns = Object.entries(QA_REASON_LABELS)
-    .map(([key, label]) => `<button onclick="qaSendFeedback(${idx},'not_mistake','${key}')">${label}</button>`)
-    .join('');
-  fb.innerHTML = `
-    <div class="qa-reason-prompt">
-      <span class="qa-reason-label">Why isn't it a mistake?</span>
-      <div class="qa-reason-btns">${btns}</div>
-      <button class="qa-reason-back" onclick="qaResetFeedbackButtons(${idx})">← Back</button>
-    </div>`;
-}
-
-function qaResetFeedbackButtons(idx) {
-  document.getElementById(`qa-fb-${idx}`).innerHTML = `
-    <button class="qa-fb-mistake" onclick="qaSubmitFeedback(${idx},'mistake')">✓ Real mistake</button>
-    <button class="qa-fb-not-mistake" onclick="qaSubmitFeedback(${idx},'not_mistake')">✗ Not a mistake</button>`;
-}
-
-function qaSendFeedback(idx, verdict, reason) {
-  const iss = _qaIssues[idx];
-  const fb  = document.getElementById(`qa-fb-${idx}`);
-  fb.innerHTML = '<span class="qa-feedback-note">Saving…</span>';
-
-  fetch('/qacheck/feedback', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      word: iss.word, verdict, reason, context: iss.context, video_name: _qaVideoName,
-    })
-  })
-    .then(r => r.json())
-    .then(data => {
-      if (data.error) {
-        fb.innerHTML = `<span class="qa-feedback-note">${escapeHtml(data.error)}</span>`;
-        return;
-      }
-      if (verdict === 'not_mistake') {
-        const label = QA_REASON_LABELS[reason] || 'not a mistake';
-        fb.innerHTML = `<span class="qa-feedback-note">✗ Marked as not a mistake (${escapeHtml(label)}) — won't be flagged again</span>`;
-        document.getElementById(`qa-item-${idx}`).classList.add('qa-dismissed');
-      } else {
-        fb.innerHTML = '<span class="qa-feedback-note">✓ Marked as a real mistake</span>';
-      }
-    })
-    .catch(() => {
-      fb.innerHTML = '<span class="qa-feedback-note">Failed to save — is the server running?</span>';
-    });
-}
-
-// ── Spelling QA learned words (view accumulated verdicts) ───────────────────
-function loadQALearnedWords() {
-  const list = document.getElementById('qa-learned-list');
-  fetch('/qacheck/feedback/list')
-    .then(r => r.json())
-    .then(words => {
-      words = Array.isArray(words) ? words : [];
-      if (!words.length) {
-        list.innerHTML = '<div class="fb-empty">No learned words yet.</div>';
-        return;
-      }
-      list.innerHTML = words.map(w => {
-        const badgeLabel = w.verdict === 'mistake'
-          ? 'Real mistake'
-          : 'Not a mistake' + (w.reason ? ' · ' + (QA_REASON_LABELS[w.reason] || w.reason) : '');
-        return `
-        <div class="qa-learned-item">
-          <span class="qa-learned-badge ${w.verdict === 'mistake' ? 'mistake' : 'not-mistake'}">${escapeHtml(badgeLabel)}</span>
-          <span class="qa-learned-word">${escapeHtml(w.word)}</span>
-          <span class="qa-learned-context">${escapeHtml(w.context || '')}</span>
-        </div>`;
-      }).join('');
-    })
-    .catch(() => { list.innerHTML = '<div class="fb-empty">Could not load learned words.</div>'; });
-}
-
-function qaSeek(time) {
-  const player = document.getElementById('qa-player');
-  if (!player) return;
-  player.pause();
-  player.currentTime = time;
-}
 </script>
 </body>
 </html>

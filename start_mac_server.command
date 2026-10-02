@@ -1,12 +1,12 @@
 #!/bin/bash
 # ── EditOps Launcher (Mac, lite server build) ───────────────────────────────
 # Same idea as start_mac.command, but installs from requirements-server.txt
-# instead of requirements.txt — skips mlx-whisper, easyocr, and
-# pyspellchecker, since a shared office server like this is meant to be used
-# via the browser by multiple teammates, not for local Whisper transcription
-# or Spelling QA on this machine itself. Use this instead of start_mac.command
-# on a Mac being set up as the shared EditOps server, so re-running it doesn't
-# reinstall heavy packages this deployment doesn't need.
+# instead of requirements.txt — skips mlx-whisper, since a shared office
+# server like this is meant to be used via the browser by multiple
+# teammates, not for local Whisper transcription on this machine itself.
+# Use this instead of start_mac.command on a Mac being set up as the
+# shared EditOps server, so re-running it doesn't reinstall the heavy
+# package this deployment doesn't need.
 #
 # This script is for interactive, see-the-output testing — double-click it,
 # confirm EditOps actually starts and is reachable, then Ctrl+C it and set up
