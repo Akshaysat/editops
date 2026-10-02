@@ -504,6 +504,24 @@
     .tr-script-copy:hover { background: #333; }
     .tr-script-body { padding: 12px 14px; font-size: 13px; line-height: 1.75; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); user-select: text; }
 
+    /* ── Spelling QA results ── */
+    .sqa-item { display: flex; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: flex-start; }
+    .sqa-item:last-child { border-bottom: none; }
+    .sqa-item:hover { background: #F8F9FA; }
+    .sqa-item-ts {
+      flex-shrink: 0; font-family: ui-monospace, 'SF Mono', monospace; font-size: 11.5px;
+      color: var(--muted); cursor: pointer; padding-top: 2px;
+    }
+    .sqa-item-ts:hover { color: var(--text); text-decoration: underline; }
+    .sqa-item-body { flex: 1; min-width: 0; }
+    .sqa-badge { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.3px; }
+    .sqa-badge.spelling      { background: #EEF3FF; color: #3355AA; }
+    .sqa-badge.black-frame   { background: #FDF3F3; color: var(--error); }
+    .sqa-badge.frozen-frame  { background: #FFF6E8; color: #B8860B; }
+    .sqa-item-text { color: var(--text); font-size: 13.5px; margin-top: 6px; line-height: 1.5; }
+    .sqa-item-mistake { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+    .sqa-item-suggestion { color: #1A7A3C; font-size: 12.5px; margin-top: 3px; }
+
     /* ── Trim timeline ── */
     .trim-timecode {
       text-align: center;
@@ -656,6 +674,8 @@
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
     <div class="nav-section">Content</div>
     <button class="nav-item"        data-tab="metadata"   onclick="switchTab(this,'metadata')"><span class="ni">✎</span> Titles & Description</button>
+    <div class="nav-section">Review</div>
+    <button class="nav-item"        data-tab="spellingqa" onclick="switchTab(this,'spellingqa')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
     <button class="nav-item"        data-tab="ytdl"       onclick="switchTab(this,'ytdl')"><span class="ni">▶</span> YouTube</button>
     <div class="nav-section">Support</div>
@@ -1251,6 +1271,39 @@
       </div>
       <div class="result-box" id="rb-replaceaudio"></div>
       <div class="error-box"  id="eb-replaceaudio"></div>
+    </div>
+  </div>
+
+  <!-- ══ SPELLING QA ══ -->
+  <div id="panel-spellingqa" class="panel">
+    <div class="page-header"><h1>Spelling QA</h1><p>Scan a video for on-screen spelling/grammar mistakes (any language) and render glitches (black or frozen frames) before it goes out to a client.</p></div>
+    <div class="card">
+      <h2>Spelling QA</h2>
+      <p class="desc">Scan a video for mistakes.</p>
+
+      <div class="dropzone" id="dz-spellingqa" onclick="document.getElementById('f-spellingqa').click()">
+        <div class="dz-icon">🔍</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-spellingqa"></div>
+        <input type="file" id="f-spellingqa" accept="video/*" style="display:none" onchange="onFile(this,'spellingqa')">
+      </div>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        🔍 Reads burned-in on-screen text (titles, captions, lower-thirds, graphics) directly — not spoken dialogue — and checks spelling/grammar in whatever language it's written.<br>
+        🎞️ Also flags black frames and frozen/stuck frames via a fast, deterministic scan — no AI involved in that part.<br>
+        👀 Every flag here is a starting point for a quick human look, not a guaranteed mistake — an intentional static title card will also show up as a "frozen frame," for example, since there's no way to tell those apart from pixels alone.
+      </div>
+
+      <button class="submit-btn" onclick="submitSpellingQA()">Scan for Mistakes</button>
+      <div class="progress-wrap" id="pw-spellingqa">
+        <div class="progress-meta"><span id="pl-spellingqa">Uploading…</span><span id="pp-spellingqa">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-spellingqa"></div></div>
+      </div>
+      <div class="result-box" id="rb-spellingqa"></div>
+      <div id="sqa-results"></div>
+      <div class="error-box"  id="eb-spellingqa"></div>
     </div>
   </div>
 
@@ -2901,6 +2954,131 @@ function copyMetadataOption(btn) {
     btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = orig, 1500);
   });
+}
+
+// ── Spelling QA ───────────────────────────────────────────────────────────
+// Analysis-only — there's no output file to download, so this doesn't use
+// the shared submit()/showResult()/ASYNC_TABS pipeline built for file-
+// producing jobs. The reviewed video itself is previewed straight from the
+// browser's own File object (like the old qacheck feature did), so there's
+// no need to fetch it back from the server at all.
+function submitSpellingQA() {
+  const file = document.getElementById('f-spellingqa').files[0];
+  if (!file) return alert('Please select a video first.');
+
+  resetUI('spellingqa');
+  document.getElementById('sqa-results').innerHTML = '';
+
+  const form = new FormData();
+  form.append('video', file);
+
+  showProgress('spellingqa', 0, 'Uploading…');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/spellingqa');
+
+  const uploadStart = Date.now();
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 50);
+    showProgress('spellingqa', pct, uploadLabel(e, uploadStart));
+  };
+
+  xhr.upload.onload = () => showProgress('spellingqa', 50, 'Scanning…');
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      let msg = 'Scan failed. Please try again.';
+      try { msg = JSON.parse(xhr.responseText).error; } catch {}
+      showError('spellingqa', msg);
+      return;
+    }
+    const { task_id } = JSON.parse(xhr.responseText);
+    pollSpellingQA(task_id, file);
+  };
+
+  xhr.onerror = () => showError('spellingqa', 'Network error — is the server running?');
+  xhr.send(form);
+}
+
+function pollSpellingQA(taskId, file) {
+  const interval = setInterval(async () => {
+    let data;
+    try {
+      data = await (await fetch('/spellingqa/status/' + taskId)).json();
+    } catch {
+      clearInterval(interval);
+      showError('spellingqa', 'Lost connection to server.');
+      return;
+    }
+
+    if (data.status === 'error') {
+      clearInterval(interval);
+      showError('spellingqa', data.error || 'Scan failed.');
+      return;
+    }
+
+    if (data.progress) {
+      document.getElementById('pl-spellingqa').textContent = data.progress;
+    }
+
+    if (data.status === 'done') {
+      clearInterval(interval);
+      document.getElementById('pw-spellingqa').classList.remove('visible');
+      renderSpellingQAResults(data.issues || [], file);
+    }
+  }, 1500);
+}
+
+const SQA_BADGE_INFO = {
+  spelling:     { cls: 'spelling',     label: 'Spelling' },
+  black_frame:  { cls: 'black-frame',  label: 'Black Frame' },
+  frozen_frame: { cls: 'frozen-frame', label: 'Frozen Frame' },
+};
+
+function renderSpellingQAResults(issues, file) {
+  const rb = document.getElementById('rb-spellingqa');
+  const results = document.getElementById('sqa-results');
+  const videoUrl = URL.createObjectURL(file);
+  const player = `<div class="tr-player-wrap"><video id="sqa-player" src="${videoUrl}" controls></video></div>`;
+
+  if (!issues.length) {
+    rb.innerHTML = `<div class="result-title">✓ No mistakes or glitches found.</div>${player}`;
+    rb.classList.add('visible');
+    results.innerHTML = '';
+    return;
+  }
+
+  const rows = issues.map(iss => {
+    const info = SQA_BADGE_INFO[iss.type] || { cls: 'spelling', label: iss.type };
+    const ts = iss.type === 'spelling' ? iss.timestamp : iss.start;
+    const bodyHtml = iss.type === 'spelling'
+      ? `<div class="sqa-item-text">${escHtml(iss.text)}</div>` +
+        `<div class="sqa-item-mistake">${escHtml(iss.mistake)}</div>` +
+        (iss.suggestion ? `<div class="sqa-item-suggestion">→ ${escHtml(iss.suggestion)}</div>` : '')
+      : `<div class="sqa-item-text">${(iss.duration || 0).toFixed(1)}s long, ` +
+        `from ${fmtTranscriptTime(iss.start)} to ${fmtTranscriptTime(iss.end)}</div>`;
+    return (
+      `<div class="sqa-item">` +
+        `<span class="sqa-item-ts" onclick="sqaSeek(${ts})">${fmtTranscriptTime(ts)}</span>` +
+        `<div class="sqa-item-body">` +
+          `<span class="sqa-badge ${info.cls}">${info.label}</span>` +
+          bodyHtml +
+        `</div>` +
+      `</div>`
+    );
+  }).join('');
+
+  rb.innerHTML = `<div class="result-title">⚠ ${issues.length} issue${issues.length === 1 ? '' : 's'} found</div>${player}`;
+  rb.classList.add('visible');
+  results.innerHTML = `<div class="tr-panel"><div class="tr-panel-header"><span>Flagged issues</span></div><div class="tr-preview">${rows}</div></div>`;
+}
+
+function sqaSeek(time) {
+  const player = document.getElementById('sqa-player');
+  if (!player) return;
+  player.pause();
+  player.currentTime = time;
 }
 
 </script>

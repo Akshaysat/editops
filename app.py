@@ -1,5 +1,5 @@
 from flask import Flask, request, render_template, send_file, jsonify
-import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil, sqlite3
+import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil, sqlite3, re
 import urllib.request, urllib.error, urllib.parse
 import zipfile, io
 
@@ -2488,6 +2488,185 @@ def generate_metadata_route():
         return jsonify(gemini_generate_metadata(script_text))
     except Exception as e:
         return jsonify(error=str(e)[:300]), 500
+
+
+# ── Spelling QA ──────────────────────────────────────────────────────────────
+# Rebuilt from scratch after the original (EasyOCR + a static English dictionary,
+# removed for being unused) — this version hands the whole video to Gemini
+# directly instead of extracting frames and running local OCR. It reads
+# burned-in on-screen text itself, judges spelling/grammar contextually rather
+# than against a fixed wordlist (no more hand-maintained jargon allowlist), and
+# works across languages natively. Verified against real test videos before
+# building this: it precisely timestamped two deliberate English typos and
+# caught an obvious Hindi grammar mistake (a repeated word), but missed a
+# subtle single-character Hindi spelling swap that a human proofreader would
+# likely also skim past — flag this as a known soft spot for non-Latin scripts,
+# not a guarantee, when telling editors how much to trust a clean scan.
+#
+# Bundled in the same scan: ffmpeg's own blackdetect/freezedetect filters catch
+# render glitches (black frames, stuck/frozen frames) — fast, deterministic,
+# no AI involved, and the one check in this feature with zero false-positive
+# risk from a model's judgment.
+
+def qa_scan_render_glitches(video_path, black_min_duration=0.1, freeze_min_duration=2.0):
+    """Runs ffmpeg's blackdetect and freezedetect filters over the video and
+    returns a list of {type, start, end, duration} issues, sorted by start
+    time. A static black frame is technically "frozen" too, so freezedetect
+    fires on the same span blackdetect already caught — overlapping freeze
+    events are dropped in favor of the more specific black-frame label
+    rather than reporting the same visual gap twice.
+
+    pix_th is lowered from blackdetect's own default (0.10) to 0.03 — verified
+    against a real test video that the default misfires on ordinary dark (not
+    black) backgrounds: a plain navy title card (luminance ≈0.057, common for
+    lower-thirds/title cards) read as "black" under the default per-pixel
+    threshold, which would make this check cry wolf on completely normal
+    content. 0.03 still catches a genuine black frame correctly while no
+    longer flagging merely-dark ones.
+
+    freeze_min_duration is raised from freezedetect's own default (0.5s) to
+    2s to filter out brief, clearly-intentional holds — but verified this
+    can't fully solve the underlying ambiguity: an intentional static title
+    card and an actual stuck-frame export bug are pixel-for-pixel identical
+    to a frame-difference detector, so a long deliberate still will still
+    surface here. That's a real, inherent limit of this technique, not a bug
+    to chase further — the frontend should frame every "frozen frame" result
+    as "worth a glance," the same way the spelling check's results are,
+    rather than implying it's necessarily a mistake."""
+    black_events = []
+    r = subprocess.run(
+        ['ffmpeg', '-i', video_path, '-vf', f'blackdetect=d={black_min_duration}:pic_th=0.98:pix_th=0.03',
+         '-an', '-f', 'null', NULL_DEV],
+        capture_output=True, text=True)
+    for m in re.finditer(r'black_start:([\d.]+)\s+black_end:([\d.]+)\s+black_duration:([\d.]+)', r.stderr):
+        start, end, duration = (float(g) for g in m.groups())
+        black_events.append({'type': 'black_frame', 'start': start, 'end': end, 'duration': duration})
+
+    freeze_events = []
+
+    def finalize_freeze(ev):
+        # A static black frame is also "frozen" by definition, so drop a
+        # freeze event that just re-reports a span blackdetect already
+        # caught, rather than flagging the same visual gap twice.
+        is_duplicate_of_black = any(abs(ev['start'] - b['start']) < 0.5 for b in black_events)
+        if not is_duplicate_of_black:
+            freeze_events.append({'type': 'frozen_frame', **ev})
+
+    r = subprocess.run(
+        ['ffmpeg', '-i', video_path, '-vf', f'freezedetect=n=-60dB:d={freeze_min_duration}',
+         '-an', '-f', 'null', NULL_DEV],
+        capture_output=True, text=True)
+    current = {}
+    for m in re.finditer(r'freeze_(start|duration|end):\s*([\d.]+)', r.stderr):
+        key, val = m.group(1), float(m.group(2))
+        if key == 'start':
+            if current:
+                # A new freeze started before the previous one got a clean
+                # "end" line — finalize what we have for it instead of
+                # silently losing a detected freeze (seen on a video with
+                # broken internal timestamps; ffmpeg's own output can be
+                # less tidy than the happy path, best-effort over discarding).
+                current.setdefault('end', val)
+                current.setdefault('duration', current['end'] - current['start'])
+                finalize_freeze(current)
+            current = {'start': val}
+        elif key == 'duration':
+            current['duration'] = val
+        elif key == 'end':
+            current['end'] = val
+            finalize_freeze(current)
+            current = {}
+    if current:
+        # The video ended while still frozen (or ffmpeg never logged a
+        # clean close) — report it anyway, ending at the video's actual
+        # duration, rather than silently dropping a real detected freeze.
+        info = ffprobe_info(video_path)
+        current.setdefault('end', info['duration'] if info else current['start'])
+        current.setdefault('duration', current['end'] - current['start'])
+        finalize_freeze(current)
+
+    return sorted(black_events + freeze_events, key=lambda e: e['start'])
+
+
+def qa_scan_spelling(video_path):
+    """Uploads the video to Gemini and asks it to find spelling/grammar
+    mistakes in burned-in on-screen text (titles, captions, lower-thirds,
+    graphics) — not spoken dialogue. Returns a list of {type, timestamp,
+    text, mistake, suggestion} issues. Raises on failure."""
+    client = _gemini_client()
+    uploaded = client.files.upload(file=video_path)
+
+    prompt = (
+        'Watch this video carefully. For each piece of on-screen text, title, '
+        'caption, lower-third, or graphic that is burned into the video image '
+        'itself (not spoken dialogue), check its spelling and grammar, in '
+        'whatever language it is written. Report ONLY genuine spelling or '
+        'grammar mistakes — not stylistic choices, not brand names, not '
+        'intentional informal language or slang.\n\n'
+        'Return ONLY a JSON array (no markdown, no commentary) of objects, one '
+        'per mistake found, each with keys: "timestamp" (seconds, number, when '
+        'the text first appears on screen), "text" (the exact on-screen text '
+        'containing the mistake), "mistake" (string, what is wrong, in '
+        'English), and "suggestion" (string, the corrected text). If there are '
+        'no mistakes, return an empty array.'
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[uploaded, prompt],
+    )
+    parsed = _parse_gemini_json(response)
+    return [
+        {
+            'type': 'spelling',
+            'timestamp': float(i.get('timestamp', 0)),
+            'text': str(i.get('text') or '').strip(),
+            'mistake': str(i.get('mistake') or '').strip(),
+            'suggestion': str(i.get('suggestion') or '').strip(),
+        }
+        for i in parsed
+    ]
+
+
+@app.route('/spellingqa', methods=['POST'])
+def spellingqa_route():
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No video uploaded'), 400
+
+    video_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Scanning for render glitches…'}
+
+    def run():
+        try:
+            glitch_issues = qa_scan_render_glitches(video_path)
+
+            _tasks[uid]['progress'] = 'Checking spelling & grammar… (Gemini)'
+            try:
+                spelling_issues = qa_scan_spelling(video_path)
+            except Exception:
+                # Gemini being unavailable shouldn't lose the (already free,
+                # already computed) glitch results — degrade gracefully
+                # rather than failing the whole scan.
+                spelling_issues = []
+
+            issues = sorted(glitch_issues + spelling_issues,
+                             key=lambda i: i.get('start', i.get('timestamp', 0)))
+            _tasks[uid] = {'status': 'done', 'issues': issues}
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+        finally:
+            cleanup_later(video_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/spellingqa/status/<task_id>')
+def spellingqa_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_')})
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
