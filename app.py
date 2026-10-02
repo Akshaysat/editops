@@ -1050,6 +1050,121 @@ def convert_result(task_id):
                      download_name=task.get('filename', 'converted'))
 
 
+@app.route('/replaceaudio', methods=['POST'])
+def replace_audio_route():
+    video_file = request.files.get('video')
+    audio_file = request.files.get('audio')
+    if not video_file:
+        return jsonify(error='No video uploaded'), 400
+    if not audio_file:
+        return jsonify(error='No audio uploaded'), 400
+
+    video_path, uid = save_upload(video_file)
+    audio_ext  = os.path.splitext(audio_file.filename)[1] or '.mp3'
+    audio_path = os.path.join(TEMP_DIR, f'vt_replaceaudio_{uid}{audio_ext}')
+    audio_file.save(audio_path)
+
+    original_name = video_file.filename
+    _tasks[uid] = {'status': 'processing', 'progress': 'Checking video and audio length…'}
+
+    def run():
+        try:
+            video_info = ffprobe_info(video_path)
+            if not video_info or not video_info['has_video']:
+                _tasks[uid] = {'status': 'error', 'error': 'Cannot read the video file.'}
+                for p in (video_path, audio_path):
+                    try: os.remove(p)
+                    except: pass
+                return
+
+            audio_info = ffprobe_info(audio_path)
+            if not audio_info or not audio_info['has_audio']:
+                _tasks[uid] = {'status': 'error', 'error': 'Cannot read the audio file — no audio stream found.'}
+                for p in (video_path, audio_path):
+                    try: os.remove(p)
+                    except: pass
+                return
+
+            # Independently authored/encoded files virtually never report
+            # byte-identical durations even when they're meant to be "the
+            # same length" — container/codec framing rounds to the nearest
+            # frame or sample block on each side. A small tolerance absorbs
+            # that rounding without accepting genuinely mismatched files;
+            # 0.5s is comfortably under one frame-rate's worth of drift at
+            # any common frame rate while still catching a real mismatch.
+            video_duration = video_info['duration']
+            audio_duration = audio_info['duration']
+            tolerance = 0.5
+            if abs(video_duration - audio_duration) > tolerance:
+                _tasks[uid] = {
+                    'status': 'error',
+                    'error': (f'Audio length ({audio_duration:.2f}s) does not match video length '
+                              f'({video_duration:.2f}s) — audio cannot be replaced unless the lengths match.'),
+                }
+                for p in (video_path, audio_path):
+                    try: os.remove(p)
+                    except: pass
+                return
+
+            out_ext = os.path.splitext(original_name)[1] or '.mp4'
+            output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}{out_ext}')
+
+            _tasks[uid]['progress'] = 'Replacing audio…'
+            # -map explicitly: video stream from the video file, audio
+            # stream from the audio file — the video's own original audio
+            # (if any) is never mapped, so it's fully replaced rather than
+            # mixed. -c:v copy re-mukes the video stream as-is (no
+            # re-encode — faster and lossless, since only the audio is
+            # changing). Audio is re-encoded to AAC regardless of its
+            # source format for broad container compatibility (same
+            # convention as /convert, /merge, /thumbnail). -shortest
+            # clamps to the shorter stream as a final safety net against
+            # the small duration difference the tolerance above allows.
+            cmd = ['ffmpeg', '-y', '-i', video_path, '-i', audio_path,
+                   '-map', '0:v:0', '-map', '1:a:0',
+                   '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+                   '-shortest', '-movflags', '+faststart', output_path]
+            r = subprocess.run(cmd, capture_output=True)
+            for p in (video_path, audio_path):
+                try: os.remove(p)
+                except: pass
+
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not replace the audio. Make sure ffmpeg is installed.'}
+                return
+
+            _tasks[uid] = {
+                'status': 'done', 'result': output_path,
+                'filename': f'{stem(original_name)}_replaced_audio{out_ext}',
+            }
+            cleanup_later(output_path, delay=RESULT_FILE_TTL)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            for p in (video_path, audio_path):
+                try: os.remove(p)
+                except: pass
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/replaceaudio/status/<task_id>')
+def replace_audio_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_') and k != 'result'})
+
+
+@app.route('/replaceaudio/result/<task_id>')
+def replace_audio_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'replaced_audio.mp4'))
+
+
 @app.route('/feedback', methods=['POST'])
 def feedback_submit():
     data = request.get_json(silent=True) or request.form

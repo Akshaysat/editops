@@ -696,6 +696,7 @@
     <button class="nav-item"        data-tab="merge"      onclick="switchTab(this,'merge')"><span class="ni">⊕</span> Merge</button>
     <button class="nav-item"        data-tab="thumbnail"  onclick="switchTab(this,'thumbnail')"><span class="ni">🖼</span> Thumbnail</button>
     <button class="nav-item"        data-tab="convert"    onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
+    <button class="nav-item"        data-tab="replaceaudio" onclick="switchTab(this,'replaceaudio')"><span class="ni">🔊</span> Replace Audio</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
@@ -1298,6 +1299,45 @@
       </div>
       <div class="result-box" id="rb-convert"></div>
       <div class="error-box"  id="eb-convert"></div>
+    </div>
+  </div>
+
+  <!-- ══ REPLACE AUDIO ══ -->
+  <div id="panel-replaceaudio" class="panel">
+    <div class="page-header"><h1>Replace Audio</h1><p>Swap a video's audio track for a separate audio file. The audio must be the same length as the video.</p></div>
+    <div class="card">
+      <h2>Replace Audio</h2>
+      <p class="desc">Replace a video's audio with a different audio file.</p>
+
+      <div class="dropzone" id="dz-replaceaudio-video" onclick="document.getElementById('f-replaceaudio-video').click()">
+        <div class="dz-icon">🎥</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-replaceaudio-video"></div>
+        <input type="file" id="f-replaceaudio-video" accept="video/*" style="display:none" onchange="onFile(this,'replaceaudio-video')">
+      </div>
+
+      <div class="dropzone" id="dz-replaceaudio-audio" onclick="document.getElementById('f-replaceaudio-audio').click()" style="margin-top:14px;">
+        <div class="dz-icon">🔊</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop the replacement audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-replaceaudio-audio"></div>
+        <input type="file" id="f-replaceaudio-audio" accept="audio/*" style="display:none" onchange="onFile(this,'replaceaudio-audio')">
+      </div>
+
+      <div class="hint" style="margin-top:14px;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;">
+        ⏱️ The audio file's length must match the video's length (within half a second) — if they don't match, you'll get an error telling you by how much instead of a silently wrong result.
+      </div>
+
+      <button class="submit-btn" onclick="submit('replaceaudio')">Replace Audio</button>
+      <div class="progress-wrap" id="pw-replaceaudio">
+        <div class="progress-meta"><span id="pl-replaceaudio">Uploading…</span><span id="pp-replaceaudio">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-replaceaudio"></div></div>
+      </div>
+      <div class="result-box" id="rb-replaceaudio"></div>
+      <div class="error-box"  id="eb-replaceaudio"></div>
     </div>
   </div>
 
@@ -1973,7 +2013,7 @@ function showResult(tab, filename, url, isPreview = false, xhr = null, uploadMs 
   const rb = document.getElementById('rb-' + tab);
   const timingHtml = isPreview ? '' : timingStatsHtml(uploadMs, processMs);
 
-  if (tab === 'speed' || tab === 'thumbnail') {
+  if (tab === 'speed' || tab === 'thumbnail' || tab === 'replaceaudio') {
     const isAudio = /\.(mp3|wav|aac|ogg|flac|m4a)$/i.test(filename);
     const tag = isAudio ? 'audio' : 'video';
     const player = `<${tag} src="${url}" controls class="result-preview"></${tag}>`;
@@ -2067,6 +2107,14 @@ function submit(tab, isPreview = false) {
     const fmt = document.querySelector('input[name="cvt-fmt"]:checked').value;
     form.append('video',  file);
     form.append('format', fmt);
+
+  } else if (tab === 'replaceaudio') {
+    const video = document.getElementById('f-replaceaudio-video').files[0];
+    const audio = document.getElementById('f-replaceaudio-audio').files[0];
+    if (!video) return alert('Please select a video first.');
+    if (!audio) return alert('Please select a replacement audio file.');
+    form.append('video', video);
+    form.append('audio', audio);
   }
 
   resetUI(tab);
@@ -2074,8 +2122,9 @@ function submit(tab, isPreview = false) {
   const xhr = new XMLHttpRequest();
   xhr.open('POST', endpoint);
 
-  // These five run a slow ffmpeg job (a large Compress/Trim/Merge/Convert/
-  // Speed Up can take many minutes) — the upload alone returns a task_id
+  // These all run a slow ffmpeg job (a large Compress/Trim/Merge/Convert/
+  // Speed Up/Replace Audio can take many minutes) — the upload alone
+  // returns a task_id
   // right away, and the actual processing happens in a background thread
   // polled via /status + /result, the same resilient pattern Transcribe and
   // Translate & Dub already use. This matters most on a shared/remote
@@ -2086,7 +2135,7 @@ function submit(tab, isPreview = false) {
   // error" with no way to tell what actually went wrong. Splitting it into
   // a fast upload + small periodic polls means a single dropped poll can
   // just retry, instead of losing the whole job.
-  const ASYNC_TABS = ['speed', 'compress', 'trim', 'merge', 'convert'];
+  const ASYNC_TABS = ['speed', 'compress', 'trim', 'merge', 'convert', 'replaceaudio'];
   const isAsyncTab = ASYNC_TABS.includes(tab);
   xhr.responseType = isAsyncTab ? 'text' : 'blob';
 
