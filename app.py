@@ -499,11 +499,31 @@ def compress_route():
 
             passlog    = os.path.join(TEMP_DIR, f'vt_pass_{uid}')
             output_path = os.path.join(TEMP_DIR, f'vt_out_{uid}.mp4')
-            audio_bits = 192_000 * info['duration']
-            vbr        = int((total_bits - audio_bits) / info['duration'])
+
+            # Audio bitrate scales down for aggressive targets instead of
+            # staying fixed at 192kbps — a flat 192kbps alone needs ~14.6MB
+            # for a 10-minute video, which used to hard-block any smaller
+            # target outright even though a (very compressed) result was
+            # still achievable. Capped at 192kbps so it never goes *up* for
+            # a generous target, floored at 32kbps so audio never gets
+            # sacrificed to literally nothing; sized to roughly 25% of the
+            # total budget in between, leaving the bulk for video.
+            audio_bitrate = min(192_000, max(32_000, int(total_bits * 0.25 / info['duration'])))
+            audio_bits    = audio_bitrate * info['duration']
+            vbr           = int((total_bits - audio_bits) / info['duration'])
 
             if vbr <= 0:
-                _tasks[uid] = {'status': 'error', 'error': 'Target size is too small for this video duration.'}
+                # Minimum feasible size at the lowest audio bitrate this will
+                # ever drop to (32kbps) plus a 1kbps floor on video itself —
+                # gives the user a concrete number to retry with instead of
+                # just being told no.
+                min_bits = (32_000 + 1_000) * info['duration']
+                min_mb = min_bits / 8 / 1_000_000
+                _tasks[uid] = {
+                    'status': 'error',
+                    'error': (f'Target size is too small for this video\'s length — '
+                              f'try at least {min_mb:.1f} MB.'),
+                }
                 cleanup_later(input_path)
                 return
 
@@ -519,7 +539,7 @@ def compress_route():
             cmd2 = ['ffmpeg', '-y', '-i', input_path,
                      '-c:v', 'libx264', '-b:v', str(vbr),
                      '-pass', '2', '-passlogfile', passlog,
-                     '-c:a', 'aac', '-b:a', '192k',
+                     '-c:a', 'aac', '-b:a', f'{audio_bitrate // 1000}k',
                      '-movflags', '+faststart', output_path]
             r = subprocess.run(cmd2, capture_output=True)
 
