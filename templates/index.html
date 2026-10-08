@@ -669,6 +669,7 @@
     <button class="nav-item"        data-tab="thumbnail"  onclick="switchTab(this,'thumbnail')"><span class="ni">🖼</span> Thumbnail</button>
     <button class="nav-item"        data-tab="convert"    onclick="switchTab(this,'convert')"><span class="ni">↺</span> Convert</button>
     <button class="nav-item"        data-tab="replaceaudio" onclick="switchTab(this,'replaceaudio')"><span class="ni">🔊</span> Replace Audio</button>
+    <button class="nav-item"        data-tab="voiceisolator" onclick="switchTab(this,'voiceisolator')"><span class="ni">🎤</span> Voice Isolator</button>
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
@@ -1271,6 +1272,37 @@
       </div>
       <div class="result-box" id="rb-replaceaudio"></div>
       <div class="error-box"  id="eb-replaceaudio"></div>
+    </div>
+  </div>
+
+  <!-- ══ VOICE ISOLATOR ══ -->
+  <div id="panel-voiceisolator" class="panel">
+    <div class="page-header"><h1>Voice Isolator</h1><p>Split a video or song's audio into an isolated vocals track and an isolated instrumental track.</p></div>
+    <div class="card">
+      <h2>Voice Isolator</h2>
+      <p class="desc">Separate vocals from music.</p>
+
+      <div class="dropzone" id="dz-voiceisolator" onclick="document.getElementById('f-voiceisolator').click()">
+        <div class="dz-icon">🎤</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-voiceisolator"></div>
+        <input type="file" id="f-voiceisolator" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'voiceisolator')">
+      </div>
+
+      <div class="hint" style="margin-top:14px;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;">
+        🧠 Runs locally on this machine (no cloud, no per-use cost) — separation quality is generally very good, but isn't perfect; expect occasional faint bleed between the two tracks.<br>
+        ⏱️ Can take a while, especially on a long file. The very first run on this server also downloads the separation model (one-time, a few hundred MB).
+      </div>
+
+      <button class="submit-btn" onclick="submitVoiceIsolator()">Isolate Voice</button>
+      <div class="progress-wrap" id="pw-voiceisolator">
+        <div class="progress-meta"><span id="pl-voiceisolator">Uploading…</span><span id="pp-voiceisolator">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-voiceisolator"></div></div>
+      </div>
+      <div class="result-box" id="rb-voiceisolator"></div>
+      <div class="error-box"  id="eb-voiceisolator"></div>
     </div>
   </div>
 
@@ -3079,6 +3111,94 @@ function sqaSeek(time) {
   if (!player) return;
   player.pause();
   player.currentTime = time;
+}
+
+// ── Voice Isolator ───────────────────────────────────────────────────────
+// Produces two separate output files (vocals + instrumental), unlike every
+// other ffmpeg-job tab here — doesn't fit the shared submit()/showResult()/
+// ASYNC_TABS pipeline (built around one result per job), so this is its own
+// dedicated flow instead, same reasoning as Spelling QA's.
+function submitVoiceIsolator() {
+  const file = document.getElementById('f-voiceisolator').files[0];
+  if (!file) return alert('Please select a video or audio file first.');
+
+  resetUI('voiceisolator');
+
+  const form = new FormData();
+  form.append('video', file);
+
+  showProgress('voiceisolator', 0, 'Uploading…');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/voiceisolator');
+
+  const uploadStart = Date.now();
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 50);
+    showProgress('voiceisolator', pct, uploadLabel(e, uploadStart));
+  };
+
+  xhr.upload.onload = () => showProgress('voiceisolator', 50, 'Processing…');
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      let msg = 'Voice isolation failed. Please try again.';
+      try { msg = JSON.parse(xhr.responseText).error; } catch {}
+      showError('voiceisolator', msg);
+      return;
+    }
+    const { task_id } = JSON.parse(xhr.responseText);
+    pollVoiceIsolator(task_id);
+  };
+
+  xhr.onerror = () => showError('voiceisolator', 'Network error — is the server running?');
+  xhr.send(form);
+}
+
+function pollVoiceIsolator(taskId) {
+  const interval = setInterval(async () => {
+    let data;
+    try {
+      data = await (await fetch('/voiceisolator/status/' + taskId)).json();
+    } catch {
+      clearInterval(interval);
+      showError('voiceisolator', 'Lost connection to server.');
+      return;
+    }
+
+    if (data.status === 'error') {
+      clearInterval(interval);
+      showError('voiceisolator', data.error || 'Voice isolation failed.');
+      return;
+    }
+
+    if (data.progress) {
+      document.getElementById('pl-voiceisolator').textContent = data.progress;
+    }
+
+    if (data.status === 'done') {
+      clearInterval(interval);
+      document.getElementById('pw-voiceisolator').classList.remove('visible');
+      renderVoiceIsolatorResults(taskId, data);
+    }
+  }, 1500);
+}
+
+function renderVoiceIsolatorResults(taskId, data) {
+  const rb = document.getElementById('rb-voiceisolator');
+  const vocalsUrl = `/voiceisolator/result/${taskId}/vocals`;
+  const instrumentalUrl = `/voiceisolator/result/${taskId}/instrumental`;
+  const label = text => `<div style="font-size:13px;font-weight:700;color:var(--text);margin:14px 0 6px;">${text}</div>`;
+  rb.innerHTML =
+    `<div class="result-title">✓ Done! Vocals and instrumental separated.</div>` +
+    label('Vocals') +
+    `<div class="tr-player-wrap"><audio src="${vocalsUrl}" controls></audio></div>` +
+    `<a class="download-btn" href="${vocalsUrl}" download="${escHtml(data.vocals_filename)}">⬇ Download ${escHtml(data.vocals_filename)}</a>` +
+    label('Instrumental') +
+    `<div class="tr-player-wrap"><audio src="${instrumentalUrl}" controls></audio></div>` +
+    `<a class="download-btn" href="${instrumentalUrl}" download="${escHtml(data.instrumental_filename)}">⬇ Download ${escHtml(data.instrumental_filename)}</a>`;
+  rb.classList.add('visible');
 }
 
 </script>

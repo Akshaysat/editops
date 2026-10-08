@@ -1174,6 +1174,121 @@ def replace_audio_result(task_id):
                      download_name=task.get('filename', 'replaced_audio.mp4'))
 
 
+@app.route('/voiceisolator', methods=['POST'])
+def voice_isolator_route():
+    """Split a video or audio file's soundtrack into an isolated vocals
+    track and an isolated instrumental/music track, via Demucs (runs
+    fully locally — no cloud dependency, no per-use cost — using the
+    htdemucs model, auto-accelerated by Apple's Metal/MPS on this Mac
+    Mini). The two output stems are served from separate endpoints
+    rather than one; see voice_isolator_result()."""
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    original_name = file.filename
+    input_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
+
+    def run():
+        try:
+            info = ffprobe_info(input_path)
+            if not info or not info['has_audio']:
+                _tasks[uid] = {'status': 'error', 'error': 'Cannot read audio from this file.'}
+                cleanup_later(input_path)
+                return
+
+            # Extract to a plain WAV first — gives Demucs a clean, uniform
+            # input regardless of the source's original container/codec,
+            # same reasoning as every other feature here that hands ffmpeg
+            # output onward to another tool rather than the raw upload.
+            audio_path = os.path.join(TEMP_DIR, f'vt_voiceiso_{uid}.wav')
+            r = subprocess.run(
+                ['ffmpeg', '-y', '-i', input_path, '-ar', '44100', '-ac', '2', audio_path],
+                capture_output=True)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from this file.'}
+                cleanup_later(input_path)
+                return
+            cleanup_later(input_path, delay=5)
+
+            # First real use on a given machine also downloads the htdemucs
+            # model weights (one-time, a few hundred MB, cached after that)
+            # — worth saying so in the progress label, since that download
+            # happens silently inside this one subprocess call and a slow
+            # first run would otherwise look identical to a stuck one.
+            _tasks[uid]['progress'] = ('Separating vocals from music… (first run on this '
+                                        'machine also downloads the separation model)')
+            out_dir = os.path.join(TEMP_DIR, f'vt_voiceiso_{uid}_out')
+            cmd = [sys.executable, '-m', 'demucs', '--two-stems=vocals',
+                   '--mp3', '--mp3-bitrate', '192', '-o', out_dir, audio_path]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            cleanup_later(audio_path, delay=5)
+
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Voice separation failed.'}
+                shutil.rmtree(out_dir, ignore_errors=True)
+                return
+
+            # Demucs' own output layout: {out_dir}/{model_name}/{input_stem}/
+            # {vocals,no_vocals}.mp3 — "no_vocals" is Demucs' own fixed name
+            # for the non-selected side of a --two-stems split (verified
+            # directly against a real run rather than assumed from docs).
+            audio_stem = os.path.splitext(os.path.basename(audio_path))[0]
+            vocals_src = os.path.join(out_dir, 'htdemucs', audio_stem, 'vocals.mp3')
+            instrumental_src = os.path.join(out_dir, 'htdemucs', audio_stem, 'no_vocals.mp3')
+            if not os.path.exists(vocals_src) or not os.path.exists(instrumental_src):
+                _tasks[uid] = {'status': 'error', 'error': 'Voice separation did not produce the expected output.'}
+                shutil.rmtree(out_dir, ignore_errors=True)
+                return
+
+            vocals_path = os.path.join(TEMP_DIR, f'vt_out_{uid}_vocals.mp3')
+            instrumental_path = os.path.join(TEMP_DIR, f'vt_out_{uid}_instrumental.mp3')
+            shutil.move(vocals_src, vocals_path)
+            shutil.move(instrumental_src, instrumental_path)
+            shutil.rmtree(out_dir, ignore_errors=True)
+
+            name_stem = stem(original_name)
+            _tasks[uid] = {
+                'status': 'done',
+                'vocals_filename': f'{name_stem}_vocals.mp3',
+                'instrumental_filename': f'{name_stem}_instrumental.mp3',
+                '_vocals_path': vocals_path,
+                '_instrumental_path': instrumental_path,
+            }
+            cleanup_later(vocals_path, delay=RESULT_FILE_TTL)
+            cleanup_later(instrumental_path, delay=RESULT_FILE_TTL)
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/voiceisolator/status/<task_id>')
+def voice_isolator_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_')})
+
+
+@app.route('/voiceisolator/result/<task_id>/<stem_type>')
+def voice_isolator_result(task_id, stem_type):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    if stem_type not in ('vocals', 'instrumental'):
+        return jsonify(error='Invalid stem type'), 400
+    path = task.get(f'_{stem_type}_path')
+    if not path or not os.path.exists(path):
+        return jsonify(error='Result not found'), 404
+    return send_file(path, as_attachment=True,
+                     download_name=task.get(f'{stem_type}_filename', f'{stem_type}.mp3'),
+                     mimetype='audio/mpeg')
+
+
 @app.route('/feedback', methods=['POST'])
 def feedback_submit():
     data = request.get_json(silent=True) or request.form
