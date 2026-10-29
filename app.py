@@ -1859,6 +1859,68 @@ def elevenlabs_extract_vocals(wav_path, vocals_out_path):
             dst.write(src.read())
 
 
+def elevenlabs_create_dub(file_path, target_lang, source_lang=None):
+    """Kicks off ElevenLabs' own automated Dubbing product (their
+    end-to-end pipeline — transcription, translation, voice cloning, and
+    re-timed generation, all run server-side on their end) for
+    file_path. Returns the new dubbing_id. source_lang=None lets
+    ElevenLabs auto-detect it.
+
+    This hits the plain POST /v1/dubbing endpoint, which ElevenLabs'
+    own docs state runs Dubbing v2 by default ("Automatic Dubbing on
+    the main Dubbing page uses Dubbing v2 by default") — no separate
+    version flag exists to set. Raises on failure."""
+    boundary = uuid.uuid4().hex
+    fields = {'target_lang': target_lang, 'highest_resolution': 'true'}
+    if source_lang:
+        fields['source_lang'] = source_lang
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+        for k, v in fields.items()
+    ]
+    with open(file_path, 'rb') as f:
+        file_bytes = f.read()
+    parts.append(
+        (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{os.path.basename(file_path)}"\r\n'
+         f'Content-Type: application/octet-stream\r\n\r\n').encode() + file_bytes + b'\r\n'
+    )
+    parts.append(f'--{boundary}--\r\n'.encode())
+    body = b''.join(parts)
+
+    req = urllib.request.Request(
+        'https://api.elevenlabs.io/v1/dubbing',
+        data=body,
+        method='POST',
+        headers={**_elevenlabs_headers(), 'Content-Type': f'multipart/form-data; boundary={boundary}'},
+    )
+    return json.loads(_elevenlabs_call(req, timeout=180))['dubbing_id']
+
+
+def elevenlabs_get_dub_status(dubbing_id):
+    """Returns the dub's current metadata dict from ElevenLabs — status
+    is 'dubbing' while in progress, 'dubbed' once ready, or 'failed'.
+    Raises only on a transport/API-level failure, not on a legitimate
+    'failed' dub (that's a normal response body, not an exception)."""
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/dubbing/{dubbing_id}',
+        headers=_elevenlabs_headers(),
+    )
+    return json.loads(_elevenlabs_call(req, timeout=30))
+
+
+def elevenlabs_download_dub(dubbing_id, target_lang, out_path):
+    """Downloads the finished dub's media (video or audio, matching
+    whatever was uploaded) to out_path. Raises on failure — including
+    if called before the dub has actually reached 'dubbed'."""
+    req = urllib.request.Request(
+        f'https://api.elevenlabs.io/v1/dubbing/{dubbing_id}/audio/{target_lang}',
+        headers=_elevenlabs_headers(),
+    )
+    data = _elevenlabs_call(req, timeout=180)
+    with open(out_path, 'wb') as f:
+        f.write(data)
+
+
 def extract_speaker_clips(wav_path, segments, speaker, out_dir, tag,
                            max_total_duration=120.0, max_clips=10, min_clip_duration=5.0):
     """Cut `speaker`'s lines from wav_path into separate short clip files
@@ -2541,6 +2603,111 @@ def translate_dub_result(task_id):
     return send_file(task['result'], as_attachment=True,
                      download_name=task.get('filename', 'translated_audio.mp3'),
                      mimetype='audio/mpeg')
+
+
+# ── Dubbing (ElevenLabs) ──────────────────────────────────────────────────────
+#
+# A separate, simpler alternative to Translate & Dub above: instead of this
+# app orchestrating transcription (Gemini) + voice cloning + TTS (ElevenLabs)
+# itself, this hands the whole job to ElevenLabs' own automated Dubbing
+# product end-to-end and just downloads whatever comes back. Built because
+# ElevenLabs' own web UI wasn't giving the desired output on some jobs —
+# this calls their API directly instead, matching Dubbing v2 (their current
+# default for automatic dubbing, confirmed against their docs).
+#
+# There's no transcript review step here (unlike Translate & Dub) — this
+# endpoint doesn't expose an intermediate transcript to edit, just upload,
+# wait, and download.
+#
+# Uses the same shared async submit()/pollAsyncJob()/showResult() pipeline
+# as Speed/Compress/Trim/Merge/Convert/Replace Audio on the frontend (added
+# to ASYNC_TABS there) rather than a bespoke flow — this is a single-file
+# result job like those, not an analysis (Spelling QA, Chapters) or a
+# multi-file one (Voice Isolator).
+
+def _dubbing_progress_label(elapsed_sec):
+    mins = int(elapsed_sec // 60)
+    return f'Dubbing in progress… (ElevenLabs, {mins} min elapsed — longer videos can take a while)'
+
+
+@app.route('/dubbing', methods=['POST'])
+def dubbing_route():
+    file = request.files.get('file')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    target_language = request.form.get('target_language')
+    if not target_language:
+        return jsonify(error='Target language is required'), 400
+    source_language = request.form.get('source_language') or None
+
+    input_path, uid = save_upload(file)
+    ext = os.path.splitext(file.filename)[1] or '.mp4'
+    original_stem = stem(file.filename)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Uploading to ElevenLabs…'}
+
+    def run():
+        try:
+            dubbing_id = elevenlabs_create_dub(input_path, target_language, source_language)
+            # ElevenLabs has its own copy now — the local upload has nothing
+            # left to do.
+            cleanup_later(input_path, delay=5)
+
+            # ElevenLabs doesn't push progress, only a status to poll. No
+            # hard attempt cap tied to a guessed processing speed — just a
+            # generous 3-hour wall-clock ceiling, comfortably past how long
+            # even their own stated max (180-minute source video) could
+            # plausibly take to process.
+            start = time.time()
+            while True:
+                info = elevenlabs_get_dub_status(dubbing_id)
+                dub_status = info.get('status')
+                if dub_status == 'dubbed':
+                    break
+                if dub_status == 'failed':
+                    _tasks[uid] = {
+                        'status': 'error',
+                        'error': info.get('error') or 'ElevenLabs dubbing failed.',
+                    }
+                    return
+                if time.time() - start > 3 * 3600:
+                    _tasks[uid] = {'status': 'error', 'error': 'Dubbing timed out after 3 hours.'}
+                    return
+                _tasks[uid]['progress'] = _dubbing_progress_label(time.time() - start)
+                time.sleep(8)
+
+            out_path = os.path.join(TEMP_DIR, f'vt_dub_{uid}{ext}')
+            elevenlabs_download_dub(dubbing_id, target_language, out_path)
+            cleanup_later(out_path, delay=RESULT_FILE_TTL)
+
+            _tasks[uid] = {
+                'status': 'done',
+                'result': out_path,
+                'filename': f'{original_stem}_dubbed_{target_language}{ext}',
+            }
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+            cleanup_later(input_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/dubbing/status/<task_id>')
+def dubbing_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_')})
+
+
+@app.route('/dubbing/result/<task_id>')
+def dubbing_result(task_id):
+    task = _tasks.get(task_id)
+    if not task or task.get('status') != 'done':
+        return jsonify(error='Result not ready'), 404
+    return send_file(task['result'], as_attachment=True,
+                     download_name=task.get('filename', 'dubbed_output.mp4'))
 
 
 # ── Titles & Description ────────────────────────────────────────────────────

@@ -673,6 +673,7 @@
     <div class="nav-section">Subtitles</div>
     <button class="nav-item"        data-tab="transcribe" onclick="switchTab(this,'transcribe')"><span class="ni">🎙</span> Transcribe</button>
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
+    <button class="nav-item"        data-tab="dubbing"    onclick="switchTab(this,'dubbing')"><span class="ni">🎬</span> Dubbing</button>
     <div class="nav-section">Content</div>
     <button class="nav-item"        data-tab="metadata"   onclick="switchTab(this,'metadata')"><span class="ni">✎</span> Titles & Description</button>
     <button class="nav-item"        data-tab="chapters"   onclick="switchTab(this,'chapters')"><span class="ni">🔖</span> Chapters</button>
@@ -1099,6 +1100,83 @@
       <div class="result-box" id="rb-translatedub"></div>
       <div id="td-extra"></div>
       <div class="error-box"  id="eb-translatedub"></div>
+    </div>
+  </div>
+
+  <!-- ══ DUBBING (ELEVENLABS) ══ -->
+  <div id="panel-dubbing" class="panel">
+    <div class="page-header"><h1>Dubbing</h1><p>Send a video or audio file straight to ElevenLabs' own automated Dubbing API and get the dubbed result back — an alternative to Translate & Dub when their own pipeline gives a better result than this app's custom one.</p></div>
+    <div class="card">
+      <h2>Dubbing</h2>
+      <p class="desc">Dub via ElevenLabs' own automated Dubbing API.</p>
+
+      <div class="dropzone" id="dz-dubbing" onclick="document.getElementById('f-dubbing').click()">
+        <div class="dz-icon">🎬</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-dubbing"></div>
+        <input type="file" id="f-dubbing" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'dubbing')">
+      </div>
+
+      <div class="field">
+        <label>Target language</label>
+        <select id="dub-target-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+          <option value="ta">Tamil</option>
+          <option value="hi">Hindi</option>
+          <option value="en">English</option>
+          <option value="mr">Marathi</option>
+          <option value="gu">Gujarati</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+          <option value="pa">Punjabi</option>
+          <option value="or">Odia</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+          <option value="ar">Arabic</option>
+          <option value="ru">Russian</option>
+          <option value="ko">Korean</option>
+          <option value="it">Italian</option>
+          <option value="nl">Dutch</option>
+          <option value="tr">Turkish</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Source language <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+        <select id="dub-source-lang" style="width:100%;background:#FAFAFA;border:1px solid var(--border);border-radius:7px;padding:9px 13px;color:var(--text);font-size:14px;appearance:none;">
+          <option value="">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="mr">Marathi</option>
+          <option value="gu">Gujarati</option>
+          <option value="ta">Tamil</option>
+          <option value="te">Telugu</option>
+          <option value="kn">Kannada</option>
+          <option value="ml">Malayalam</option>
+          <option value="pa">Punjabi</option>
+          <option value="or">Odia</option>
+        </select>
+      </div>
+
+      <div class="hint" style="margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;line-height:1.6;">
+        ☁️ Your file and the finished dub both pass through ElevenLabs' own servers — this runs their complete pipeline (transcription, translation, voice cloning, re-timing) for you, with no transcript review step along the way.<br>
+        ⏱️ Can take a while, especially on a long file — progress just shows elapsed time since ElevenLabs doesn't report a percentage.<br>
+        💰 This is billed per minute on your ElevenLabs account, separate from Translate & Dub's usage.
+      </div>
+
+      <button class="submit-btn" onclick="submit('dubbing')">Dub Video</button>
+      <div class="progress-wrap" id="pw-dubbing">
+        <div class="progress-meta"><span id="pl-dubbing">Uploading…</span><span id="pp-dubbing">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-dubbing"></div></div>
+      </div>
+      <div class="result-box" id="rb-dubbing"></div>
+      <div class="error-box"  id="eb-dubbing"></div>
     </div>
   </div>
 
@@ -2144,6 +2222,15 @@ function submit(tab, isPreview = false) {
     if (!audio) return alert('Please select a replacement audio file.');
     form.append('video', video);
     form.append('audio', audio);
+
+  } else if (tab === 'dubbing') {
+    const file = document.getElementById('f-dubbing').files[0];
+    if (!file) return alert('Please select a video or audio file first.');
+    const targetLang = document.getElementById('dub-target-lang').value;
+    const sourceLang = document.getElementById('dub-source-lang').value;
+    form.append('file', file);
+    form.append('target_language', targetLang);
+    if (sourceLang) form.append('source_language', sourceLang);
   }
 
   resetUI(tab);
@@ -2164,7 +2251,7 @@ function submit(tab, isPreview = false) {
   // error" with no way to tell what actually went wrong. Splitting it into
   // a fast upload + small periodic polls means a single dropped poll can
   // just retry, instead of losing the whole job.
-  const ASYNC_TABS = ['speed', 'compress', 'trim', 'merge', 'convert', 'replaceaudio'];
+  const ASYNC_TABS = ['speed', 'compress', 'trim', 'merge', 'convert', 'replaceaudio', 'dubbing'];
   const isAsyncTab = ASYNC_TABS.includes(tab);
   xhr.responseType = isAsyncTab ? 'text' : 'blob';
 
