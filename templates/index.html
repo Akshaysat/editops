@@ -675,6 +675,7 @@
     <button class="nav-item"        data-tab="translatedub" onclick="switchTab(this,'translatedub')"><span class="ni">🌐</span> Translate & Dub</button>
     <div class="nav-section">Content</div>
     <button class="nav-item"        data-tab="metadata"   onclick="switchTab(this,'metadata')"><span class="ni">✎</span> Titles & Description</button>
+    <button class="nav-item"        data-tab="chapters"   onclick="switchTab(this,'chapters')"><span class="ni">🔖</span> Chapters</button>
     <div class="nav-section">Review</div>
     <button class="nav-item"        data-tab="spellingqa" onclick="switchTab(this,'spellingqa')"><span class="ni">🔍</span> Spelling QA</button>
     <div class="nav-section">Download</div>
@@ -1120,6 +1121,37 @@
       </div>
       <div class="error-box" id="eb-metadata"></div>
       <div id="md-results"></div>
+    </div>
+  </div>
+
+  <!-- ══ CHAPTERS ══ -->
+  <div id="panel-chapters" class="panel">
+    <div class="page-header"><h1>Chapters</h1><p>Upload a video and get YouTube chapter markers — timestamp + title for each section, ready to paste straight into the description box.</p></div>
+    <div class="card">
+      <h2>Chapters</h2>
+      <p class="desc">Generate YouTube chapter markers for a video.</p>
+
+      <div class="dropzone" id="dz-chapters" onclick="document.getElementById('f-chapters').click()">
+        <div class="dz-icon">🔖</div>
+        <div class="dz-default">
+          <div class="dz-label">Drop your video or audio here or <b>browse</b></div>
+        </div>
+        <div class="dz-file-info" id="fi-chapters"></div>
+        <input type="file" id="f-chapters" accept="video/*,audio/*" style="display:none" onchange="onFile(this,'chapters')">
+      </div>
+
+      <div class="hint" style="margin-top:14px;margin-bottom:18px;padding:10px 13px;border:1px solid var(--border);border-radius:7px;">
+        🔖 YouTube only turns this into clickable chapters if the description has at least 3 timestamps, the first is 0:00, and each chapter runs at least 10 seconds — this is generated to already satisfy all three.
+      </div>
+
+      <button class="submit-btn" onclick="submitChapters()">Generate Chapters</button>
+      <div class="progress-wrap" id="pw-chapters">
+        <div class="progress-meta"><span id="pl-chapters">Uploading…</span><span id="pp-chapters">0%</span></div>
+        <div class="progress-bar"><div class="progress-fill" id="pf-chapters"></div></div>
+      </div>
+      <div class="result-box" id="rb-chapters"></div>
+      <div class="error-box"  id="eb-chapters"></div>
+      <div id="ch-results"></div>
     </div>
   </div>
 
@@ -2982,6 +3014,119 @@ function renderMetadataResults(data) {
 
 function copyMetadataOption(btn) {
   navigator.clipboard.writeText(btn.dataset.text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+}
+
+// ── Chapters ──────────────────────────────────────────────────────────────
+// Analysis-only, like Spelling QA below — the result is a ready-to-copy
+// text block, not a downloadable file, so this doesn't use the shared
+// submit()/showResult()/ASYNC_TABS pipeline either.
+function submitChapters() {
+  const file = document.getElementById('f-chapters').files[0];
+  if (!file) return alert('Please select a video first.');
+
+  resetUI('chapters');
+  document.getElementById('ch-results').innerHTML = '';
+
+  const form = new FormData();
+  form.append('video', file);
+
+  showProgress('chapters', 0, 'Uploading…');
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/chapters');
+
+  const uploadStart = Date.now();
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = Math.round(e.loaded / e.total * 50);
+    showProgress('chapters', pct, uploadLabel(e, uploadStart));
+  };
+
+  xhr.upload.onload = () => showProgress('chapters', 50, 'Extracting audio…');
+
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      let msg = 'Could not generate chapters. Please try again.';
+      try { msg = JSON.parse(xhr.responseText).error; } catch {}
+      showError('chapters', msg);
+      return;
+    }
+    const { task_id } = JSON.parse(xhr.responseText);
+    pollChapters(task_id);
+  };
+
+  xhr.onerror = () => showError('chapters', 'Network error — is the server running?');
+  xhr.send(form);
+}
+
+function pollChapters(taskId) {
+  const interval = setInterval(async () => {
+    let data;
+    try {
+      data = await (await fetch('/chapters/status/' + taskId)).json();
+    } catch {
+      clearInterval(interval);
+      showError('chapters', 'Lost connection to server.');
+      return;
+    }
+
+    if (data.status === 'error') {
+      clearInterval(interval);
+      showError('chapters', data.error || 'Could not generate chapters.');
+      return;
+    }
+
+    if (data.progress) {
+      document.getElementById('pl-chapters').textContent = data.progress;
+    }
+
+    if (data.status === 'done') {
+      clearInterval(interval);
+      document.getElementById('pw-chapters').classList.remove('visible');
+      renderChaptersResult(data.chapters || []);
+    }
+  }, 1500);
+}
+
+// M:SS / H:MM:SS, no decimals — the format YouTube actually expects pasted
+// into a description, unlike fmtTranscriptTime's millisecond precision
+// (built for editing a transcript, not for this).
+function fmtChapterTime(s) {
+  const total = Math.floor(s);
+  const h   = Math.floor(total / 3600);
+  const m   = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const mm  = h > 0 ? String(m).padStart(2, '0') : String(m);
+  const ss  = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+let _chChapters = [];
+
+function renderChaptersResult(chapters) {
+  _chChapters = chapters;
+  const rb = document.getElementById('rb-chapters');
+  const results = document.getElementById('ch-results');
+
+  rb.innerHTML = `<div class="result-title">✓ ${chapters.length} chapters found</div>`;
+  rb.classList.add('visible');
+
+  const text = chapters.map(c => `${fmtChapterTime(c.start)} ${c.title}`).join('\n');
+  results.innerHTML =
+    `<div class="tr-panel"><div class="tr-panel-header"><span>Paste into your YouTube description</span>` +
+    `<span class="tr-panel-actions">` +
+    `<button class="tr-script-copy" onclick="copyChapters(this)">Copy</button>` +
+    `</span></div>` +
+    `<div class="tr-script-body" id="ch-script-body">${escHtml(text)}</div></div>`;
+}
+
+function copyChapters(btn) {
+  const text = _chChapters.map(c => `${fmtChapterTime(c.start)} ${c.title}`).join('\n');
+  navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
     btn.textContent = 'Copied!';
     setTimeout(() => btn.textContent = orig, 1500);

@@ -2630,6 +2630,171 @@ def generate_metadata_route():
         return jsonify(error=str(e)[:300]), 500
 
 
+# ── YouTube Chapters ─────────────────────────────────────────────────────────
+#
+# Takes a video upload (not pasted text, like Titles & Description — it
+# needs real timing, which only comes from Gemini actually listening to the
+# file) and returns a list of timestamp + short-title chapter markers ready
+# to paste straight into a YouTube description box.
+#
+# YouTube only turns a description's timestamp list into clickable chapters
+# if it meets these hard rules: the first line is exactly 0:00, there are at
+# least 3 timestamps, and every chapter runs at least 10 seconds — including
+# the last one, so the final chapter can't start within 10s of the end (it
+# also needs strictly increasing order, which sorting already guarantees).
+# That makes 30s the shortest video that can possibly qualify.
+#
+# The prompt states these rules, but the model's output is not trusted to
+# satisfy them — all of it is re-enforced in code. Verified why that matters:
+# handed a 12-second clip, Gemini confidently returned chapters at 31s and
+# 56s, well past the end of the file (it recognized the content and filled in
+# structure that wasn't in the audio it was given). Timestamps past the end
+# would silently produce broken chapters, so anything that can't be a real
+# 10-second chapter inside the actual duration is dropped here, and a video
+# that can't meet the rules is reported as such instead.
+
+CHAPTER_MIN_SECONDS = 10
+
+
+def gemini_generate_chapters(wav_path, duration):
+    """Asks Gemini to split the audio into natural chapters. Returns a list
+    of {start, title} dicts, sorted by start time, with YouTube's chapter
+    rules re-enforced in code rather than trusted from the model's output.
+    `duration` is the media's real length in seconds, used both to ground the
+    prompt and to discard any timestamp that couldn't be a valid chapter.
+    Raises on failure."""
+    client = _gemini_client()
+    uploaded = client.files.upload(file=wav_path)
+
+    prompt = (
+        'Listen to this audio and break it into chapters for a YouTube '
+        'video description — the same way a creator marks up their '
+        'timeline so viewers can jump straight to the part they care '
+        'about. Each chapter should cover a genuinely distinct topic or '
+        'section, not every sentence or individual thought.\n\n'
+        f'This audio is exactly {duration:.0f} seconds long. Every '
+        'timestamp you return must come from what you actually hear in '
+        'it, and no timestamp may be at or past the end of it. Never '
+        'guess or infer structure that is not in this audio.\n\n'
+        'Follow YouTube\'s actual rules for chapters to work at all: the '
+        'first chapter must start at 0 seconds, there must be at least 3 '
+        'chapters, and every chapter must run at least 10 seconds — so no '
+        'two chapters can start less than 10 seconds apart, and the last '
+        'chapter must start at least 10 seconds before the end. If the '
+        'content doesn\'t obviously split into many sections, still use '
+        'your best judgment to find at least 3 reasonably distinct '
+        'segments rather than returning fewer.\n\n'
+        'For each chapter, write a short, punchy title (a few words, the '
+        'way a YouTube chapter title actually reads — not a full '
+        'sentence) describing what that part of the video covers.\n\n'
+        'Return ONLY a JSON array (no markdown, no commentary) of '
+        'objects, each with keys "start" (seconds, number) and "title" '
+        '(string).'
+    )
+    response = client.models.generate_content(
+        model='gemini-flash-latest',
+        contents=[uploaded, prompt],
+    )
+    parsed = _parse_gemini_json(response)
+
+    chapters = sorted(
+        (
+            {'start': float(c.get('start', 0)), 'title': str(c.get('title') or '').strip()}
+            for c in parsed
+        ),
+        key=lambda c: c['start'],
+    )
+    # A chapter has to fit a full 10 seconds inside the real duration to be
+    # a chapter at all — this is what catches a hallucinated timestamp past
+    # the end of the file, not just an over-eager split.
+    last_valid_start = duration - CHAPTER_MIN_SECONDS
+    chapters = [c for c in chapters if c['title'] and c['start'] <= last_valid_start]
+    if not chapters:
+        return []
+
+    chapters[0]['start'] = 0.0
+    filtered = [chapters[0]]
+    for c in chapters[1:]:
+        if c['start'] - filtered[-1]['start'] >= CHAPTER_MIN_SECONDS:
+            filtered.append(c)
+    return filtered
+
+
+@app.route('/chapters', methods=['POST'])
+def chapters_route():
+    file = request.files.get('video')
+    if not file:
+        return jsonify(error='No file uploaded'), 400
+
+    input_path, uid = save_upload(file)
+    _tasks[uid] = {'status': 'processing', 'progress': 'Extracting audio…'}
+
+    def run():
+        wav_path = os.path.join(TEMP_DIR, f'vt_ch_{uid}.wav')
+        try:
+            info = ffprobe_info(input_path)
+            if not info or not info['duration']:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not read this file — is it a valid video or audio file?'}
+                return
+
+            duration = info['duration']
+            # 3 chapters x 10s each is the floor YouTube's own rules impose,
+            # so anything shorter can't qualify no matter how it's split —
+            # say so up front instead of spending a Gemini call to find out.
+            min_total = 3 * CHAPTER_MIN_SECONDS
+            if duration < min_total:
+                _tasks[uid] = {
+                    'status': 'error',
+                    'error': (
+                        f'This file is only {duration:.0f}s long. YouTube needs at '
+                        f'least 3 chapters of 10s each, so chapters need a video of '
+                        f'at least {min_total}s.'
+                    ),
+                }
+                return
+
+            r = subprocess.run(
+                ['ffmpeg', '-y', '-i', input_path,
+                 '-ar', '16000', '-ac', '1', '-f', 'wav', wav_path],
+                capture_output=True)
+            if r.returncode != 0:
+                _tasks[uid] = {'status': 'error', 'error': 'Could not extract audio from this file.'}
+                return
+
+            _tasks[uid]['progress'] = 'Finding chapters… (Gemini)'
+            chapters = gemini_generate_chapters(wav_path, duration)
+
+            if len(chapters) < 3:
+                _tasks[uid] = {
+                    'status': 'error',
+                    'error': (
+                        f'Only found {len(chapters)} usable chapter(s) in this '
+                        'video — YouTube needs at least 3, each running 10s or '
+                        'more. Try a longer video, or one that covers more '
+                        'distinct topics.'
+                    ),
+                }
+                return
+
+            _tasks[uid] = {'status': 'done', 'chapters': chapters}
+        except Exception as e:
+            _tasks[uid] = {'status': 'error', 'error': str(e)[:300]}
+        finally:
+            cleanup_later(input_path)
+            cleanup_later(wav_path)
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(task_id=uid)
+
+
+@app.route('/chapters/status/<task_id>')
+def chapters_status(task_id):
+    task = _tasks.get(task_id)
+    if not task:
+        return jsonify(error='Task not found'), 404
+    return jsonify({k: v for k, v in task.items() if not k.startswith('_')})
+
+
 # ── Spelling QA ──────────────────────────────────────────────────────────────
 # Rebuilt from scratch after the original (EasyOCR + a static English dictionary,
 # removed for being unused) — this version hands the whole video to Gemini
