@@ -1,7 +1,7 @@
 from flask import Flask, request, render_template, send_file, jsonify
 import subprocess, os, uuid, json, tempfile, threading, time, sys, glob, shutil, sqlite3, re
 import urllib.request, urllib.error, urllib.parse
-import zipfile, io
+import zipfile, io, mimetypes
 
 try:
     from dotenv import load_dotenv
@@ -1880,9 +1880,15 @@ def elevenlabs_create_dub(file_path, target_lang, source_lang=None):
     ]
     with open(file_path, 'rb') as f:
         file_bytes = f.read()
+    # ElevenLabs validates this part's declared Content-Type against the
+    # actual file — a generic application/octet-stream (this function's
+    # original value) gets rejected outright with "unsupported_content_type",
+    # confirmed against the live API. A real video/audio MIME type guessed
+    # from the extension is required instead.
+    file_mime = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
     parts.append(
         (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{os.path.basename(file_path)}"\r\n'
-         f'Content-Type: application/octet-stream\r\n\r\n').encode() + file_bytes + b'\r\n'
+         f'Content-Type: {file_mime}\r\n\r\n').encode() + file_bytes + b'\r\n'
     )
     parts.append(f'--{boundary}--\r\n'.encode())
     body = b''.join(parts)
